@@ -26,7 +26,7 @@ pub(crate) fn maybe_create_entry_wrapper(
 
     if main_def_id.is_local() {
         let instance = Instance::mono(tcx, main_def_id);
-        if module.get_name(tcx.symbol_name(instance).name).is_none() {
+        if module.get_name(symbol_name_for_clif(tcx, instance)).is_none() {
             return;
         }
     } else if !is_primary_cgu {
@@ -77,7 +77,7 @@ pub(crate) fn maybe_create_entry_wrapper(
 
         let instance = Instance::mono(tcx, rust_main_def_id);
 
-        let main_name = tcx.symbol_name(instance).name;
+        let main_name = symbol_name_for_clif(tcx, instance);
         let main_sig = get_function_sig(tcx, m.target_config().default_call_conv, instance);
         let main_func_id = m.declare_function(main_name, Linkage::Import, &main_sig).unwrap();
 
@@ -119,7 +119,7 @@ pub(crate) fn maybe_create_entry_wrapper(
                     DUMMY_SP,
                 );
 
-                let report_name = tcx.symbol_name(report).name;
+                let report_name = symbol_name_for_clif(tcx, report);
                 let report_sig = get_function_sig(tcx, m.target_config().default_call_conv, report);
                 let report_func_id =
                     m.declare_function(report_name, Linkage::Import, &report_sig).unwrap();

@@ -15,6 +15,7 @@ use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_session::config::OutputFilenames;
 use rustc_span::Symbol;
 
+use crate::common::symbol_name_for_clif;
 use crate::constant::ConstantCx;
 use crate::debuginfo::{FunctionDebugContext, TypeDebugContext};
 use crate::prelude::*;
@@ -41,7 +42,7 @@ pub(crate) fn codegen_fn<'tcx>(
 ) -> CodegenedFunction {
     debug_assert!(!instance.args.has_infer());
 
-    let symbol_name = tcx.symbol_name(instance).name.to_string();
+    let symbol_name = symbol_name_for_clif(tcx, instance).to_string();
     let _timer = tcx.prof.generic_activity_with_arg("codegen fn", &*symbol_name);
 
     let mir = tcx.instance_mir(instance.def);
@@ -1097,7 +1098,7 @@ fn codegen_panic_inner<'tcx>(
         return;
     }
 
-    let symbol_name = fx.tcx.symbol_name(instance).name;
+    let symbol_name = symbol_name_for_clif(fx.tcx, instance);
 
     let sig = Signature {
         params: args.iter().map(|&arg| AbiParam::new(fx.bcx.func.dfg.value_type(arg))).collect(),

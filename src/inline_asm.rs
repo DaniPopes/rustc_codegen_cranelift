@@ -118,8 +118,6 @@ pub(crate) fn codegen_inline_asm_terminator<'tcx>(
                         args,
                     )
                     .unwrap();
-                    let symbol = fx.tcx.symbol_name(instance);
-
                     // Pass a wrapper rather than the function itself as the function itself may not
                     // be exported from the main codegen unit and may thus be unreachable from the
                     // object file created by an external assembler.
@@ -132,7 +130,12 @@ pub(crate) fn codegen_inline_asm_terminator<'tcx>(
                     fx.inline_asm_index += 1;
                     let sig =
                         get_function_sig(fx.tcx, fx.target_config.default_call_conv, instance);
-                    create_wrapper_function(fx.module, sig, &wrapper_name, symbol.name);
+                    create_wrapper_function(
+                        fx.module,
+                        sig,
+                        &wrapper_name,
+                        symbol_name_for_clif(fx.tcx, instance),
+                    );
 
                     CInlineAsmOperand::Symbol { symbol: wrapper_name }
                 } else {
@@ -142,7 +145,9 @@ pub(crate) fn codegen_inline_asm_terminator<'tcx>(
             InlineAsmOperand::SymStatic { def_id } => {
                 assert!(fx.tcx.is_static(def_id));
                 let instance = Instance::mono(fx.tcx, def_id);
-                CInlineAsmOperand::Symbol { symbol: fx.tcx.symbol_name(instance).name.to_owned() }
+                CInlineAsmOperand::Symbol {
+                    symbol: symbol_name_for_clif(fx.tcx, instance).to_owned(),
+                }
             }
             InlineAsmOperand::Label { .. } => {
                 span_bug!(span, "asm! label operands are not yet supported");

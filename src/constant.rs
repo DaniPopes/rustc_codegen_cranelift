@@ -278,7 +278,7 @@ fn data_id_for_static(
     let attrs = tcx.codegen_fn_attrs(def_id);
 
     let instance = Instance::mono(tcx, def_id);
-    let symbol_name = tcx.symbol_name(instance).name;
+    let symbol_name = symbol_name_for_clif(tcx, instance);
 
     if let Some(import_linkage) = attrs.import_linkage {
         assert!(!definition);

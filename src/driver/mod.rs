@@ -24,7 +24,7 @@ fn predefine_mono_items<'tcx>(
         for &(mono_item, data) in mono_items {
             match mono_item {
                 MonoItem::Fn(instance) => {
-                    let name = tcx.symbol_name(instance).name;
+                    let name = crate::common::symbol_name_for_clif(tcx, instance);
                     let _inst_guard = crate::PrintOnPanic(|| format!("{:?} {}", instance, name));
                     let sig =
                         get_function_sig(tcx, module.target_config().default_call_conv, instance);

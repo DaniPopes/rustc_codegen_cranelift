@@ -98,7 +98,7 @@ pub(crate) fn import_function<'tcx>(
     module: &mut dyn Module,
     inst: Instance<'tcx>,
 ) -> FuncId {
-    let name = tcx.symbol_name(inst).name;
+    let name = symbol_name_for_clif(tcx, inst);
     let sig = get_function_sig(tcx, module.target_config().default_call_conv, inst);
     match module.declare_function(name, Linkage::Import, &sig) {
         Ok(func_id) => func_id,
@@ -419,10 +419,11 @@ pub(crate) fn codegen_terminator_call<'tcx>(
             }
         }
 
-        if fx.tcx.symbol_name(instance).name.starts_with("llvm.") {
+        let intrinsic_name = fx.tcx.symbol_name(instance).name;
+        if intrinsic_name.starts_with("llvm.") {
             crate::intrinsics::codegen_llvm_intrinsic_call(
                 fx,
-                fx.tcx.symbol_name(instance).name,
+                intrinsic_name,
                 args,
                 ret_place,
                 target,

@@ -321,7 +321,7 @@ impl DebugContext {
         let type_id = self.debug_type(tcx, type_dbg, static_type);
 
         let name = tcx.item_name(def_id);
-        let linkage_name = tcx.symbol_name(Instance::mono(tcx, def_id)).name;
+        let linkage_name = crate::common::symbol_name_for_clif(tcx, Instance::mono(tcx, def_id));
 
         let entry_id = self.dwarf.unit.add(scope, gimli::DW_TAG_variable);
         let entry = self.dwarf.unit.get_mut(entry_id);

@@ -24,6 +24,33 @@ pub(crate) fn pointer_ty(tcx: TyCtxt<'_>) -> types::Type {
     }
 }
 
+/// Get the symbol name for an instance, stripping the LLVM verbatim marker if present.
+///
+/// The `\x01` prefix is an LLVM-specific mechanism that disables LLVM's name mangling.
+/// Cranelift doesn't understand this prefix, so we strip it before using the symbol name.
+///
+/// Additionally, on platforms where Cranelift's object crate automatically adds a `_` prefix
+/// (macOS/Mach-O and Windows i686/COFF), we also strip the leading `_` from the symbol name
+/// to avoid double-prefixing.
+pub(crate) fn symbol_name_for_clif<'tcx>(tcx: TyCtxt<'tcx>, inst: Instance<'tcx>) -> &'tcx str {
+    let name = tcx.symbol_name(inst).name;
+    match name.strip_prefix('\x01') {
+        Some(name) => {
+            // The object crate will add a `_` prefix on macOS and Windows i686 (32-bit).
+            // Since the \x01 marker indicates the name should be used verbatim,
+            // and it typically already includes the platform prefix, strip it here
+            // to avoid double-prefixing.
+            let target = &tcx.sess.target;
+            if target.is_like_darwin || (target.is_like_windows && target.pointer_width == 32) {
+                name.strip_prefix('_').unwrap_or(name)
+            } else {
+                name
+            }
+        }
+        None => name,
+    }
+}
+
 pub(crate) fn scalar_to_clif_type(tcx: TyCtxt<'_>, scalar: Scalar) -> Type {
     match scalar.primitive() {
         Primitive::Int(int, _sign) => match int {
