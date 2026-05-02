@@ -47,7 +47,16 @@ nightly.
 rustup default nightly-2026-04-01
 ```
 
-## 6. Verify
+## 6. Remove the old pinned nightly
+
+After switching the default, remove the previous pinned nightly to avoid accidentally
+building against stale rustc-dev artifacts.
+
+```bash
+rustup toolchain uninstall nightly-2026-04-01
+```
+
+## 7. Verify
 
 ```bash
 rustc --version
