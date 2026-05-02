@@ -40,7 +40,7 @@ use std::sync::Arc;
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
 use rustc_codegen_ssa::traits::CodegenBackend;
-use rustc_codegen_ssa::{CompiledModules, CrateInfo, TargetConfig};
+use rustc_codegen_ssa::{CompiledModules, CrateInfo, TargetConfig, back};
 use rustc_log::tracing::info;
 use rustc_middle::dep_graph::{WorkProduct, WorkProductId};
 use rustc_session::Session;
@@ -244,7 +244,9 @@ fn enable_verifier(sess: &Session) -> bool {
 }
 
 fn target_triple(sess: &Session) -> target_lexicon::Triple {
-    match sess.target.llvm_target.parse() {
+    // Use versioned target triple to make `OperatingSystem::MacOSX(...)`
+    // contain a value, which we use when emitting `LC_BUILD_VERSION`.
+    match back::versioned_llvm_target(sess).parse() {
         Ok(triple) => triple,
         Err(err) => sess.dcx().fatal(format!("target not recognized: {}", err)),
     }
