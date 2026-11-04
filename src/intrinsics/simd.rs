@@ -73,7 +73,7 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
                     &|fx, _lane_ty, res_lane_ty, x_lane, y_lane| {
                         let res_lane = match cmp {
                             SimdCmp::Int(cc) => fx.bcx.ins().icmp(cc, x_lane, y_lane),
-                            // FIXME(bytecodealliance/wasmtime#8312): Replace with Cranelift
+                            // FIXME(upstream Cranelift f16/f128 lowering): Replace with Cranelift
                             // `fcmp` once `f16`/`f128` backend lowerings have been added to
                             // Cranelift.
                             SimdCmp::Float(cc) => codegen_f16_f128::fcmp(fx, cc, x_lane, y_lane),
@@ -427,7 +427,7 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
                                     "fmodf",
                                     vec![AbiParam::new(types::F32), AbiParam::new(types::F32)],
                                     vec![AbiParam::new(types::F32)],
-                                    // FIXME(bytecodealliance/wasmtime#8312): Already converted
+                                    // FIXME(upstream Cranelift f16/f128 lowering): Already converted
                                     // by the FIXME above.
                                     // fx.bcx.ins().fpromote(types::F32, lhs),
                                     // fx.bcx.ins().fpromote(types::F32, rhs),
