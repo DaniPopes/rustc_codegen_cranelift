@@ -119,6 +119,18 @@ struct Align16(u64, u64);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 #[repr(C)]
+struct IntPair(u64, u64);
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[repr(C)]
+struct FloatPair(f32, f32);
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[repr(C)]
+struct DoublePair(f64, f64);
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[repr(C)]
 struct WrapU128(u128);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -134,6 +146,24 @@ impl Val for HfaF32x3 {
 impl Val for MixedFloatInt {
     fn val(seed: u64) -> Self {
         MixedFloatInt(Val::val(seed * 2), Val::val(seed * 2 + 1))
+    }
+}
+
+impl Val for IntPair {
+    fn val(seed: u64) -> Self {
+        IntPair(Val::val(seed * 2), Val::val(seed * 2 + 1))
+    }
+}
+
+impl Val for FloatPair {
+    fn val(seed: u64) -> Self {
+        FloatPair(Val::val(seed * 2), Val::val(seed * 2 + 1))
+    }
+}
+
+impl Val for DoublePair {
+    fn val(seed: u64) -> Self {
+        DoublePair(Val::val(seed * 2), Val::val(seed * 2 + 1))
     }
 }
 
@@ -263,6 +293,19 @@ cases! {
     "Rust" fn rust_u128_after_five_u64(a: u64, b: u64, c: u64, d: u64, e: u64, x: u128, y: u64) -> ();
     "Rust" fn rust_pair_after_five_u64(a: u64, b: u64, c: u64, d: u64, e: u64, x: (u128, u64), y: u64) -> ();
     "C" fn u128_pair_return(a: u64, b: u64, c: u64, d: u64, e: u64, x: u128, y: u64) -> u128;
+
+    // An aggregate that needs more registers than are left is passed on the stack as a whole, and
+    // the registers that are left stay free (x86_64) or are used up (aarch64).
+    "C" fn int_pair_after_five_u64(a: u64, b: u64, c: u64, d: u64, e: u64, x: IntPair, y: u64) -> ();
+    "C" fn int_pair_after_seven_u64(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, x: IntPair, y: u64) -> ();
+    "C" fn mixed_pair_after_five_u64(a: u64, b: u64, c: u64, d: u64, e: u64, x: MixedFloatInt, y: u64, z: f64) -> ();
+    "C" fn mixed_pair_after_seven_u64(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, x: MixedFloatInt, y: u64, z: f64) -> ();
+    "C" fn float_pair_after_seven_f64(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, x: FloatPair, y: f64) -> ();
+    "C" fn double_pair_after_seven_f64(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, x: DoublePair, y: f64) -> ();
+    "C" fn hfa_after_six_f64(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, x: HfaF32x3, y: f64) -> ();
+    "C" fn mixed_pair_after_seven_f64(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, x: MixedFloatInt, y: u64, z: f64) -> ();
+    "C" fn align16_after_one_u64(a: u64, x: Align16, y: u64) -> ();
+    "C" fn align16_after_three_u64(a: u64, b: u64, c: u64, x: Align16, y: u64) -> ();
 
     // An aggregate that is passed in memory because no registers are left must keep its alignment
     // of 16 bytes on the stack.
