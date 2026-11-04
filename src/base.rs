@@ -1137,7 +1137,7 @@ fn codegen_panic_inner<'tcx>(
         fx.add_comment(nop_inst, format!("panic {}", symbol_name));
     }
 
-    codegen_call_with_unwind_action(fx, span, CallTarget::Direct(func_ref), unwind, args, None);
+    codegen_call_with_unwind_action(fx, CallTarget::Direct(func_ref), unwind, args, None);
 
     fx.bcx.ins().trap(TrapCode::user(1 /* unreachable */).unwrap());
 }
