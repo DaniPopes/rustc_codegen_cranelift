@@ -14,6 +14,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use rustc_data_structures::fx::FxIndexMap;
 use rustc_middle::ty::TypingEnv;
 use rustc_span::Spanned;
+use rustc_target::spec::Arch;
 
 use crate::prelude::*;
 
@@ -143,7 +144,8 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
     let mut params = String::new();
     let mut wrapper_params = String::new();
     let mut call_args = String::new();
-    let mut by_ptr_args = Vec::new();
+    // The arguments passed to the wrapper, and whether they are passed in registers.
+    let mut wrapper_arg_kinds = Vec::new();
     for (i, arg) in args.iter().enumerate() {
         let arg_ty = fx.monomorphize(arg.node.ty(fx.mir, fx.tcx));
         let Some(arg_ty_str) = printer.print(arg_ty) else { return false };
@@ -163,13 +165,19 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
         };
         if let Some(literal) = literal {
             write!(call_args, "{literal}, ").unwrap();
+        } else if passed_by_value(fx, fx.layout_of(arg_ty)) {
+            write!(wrapper_params, "a{i}: {arg_ty_str}, ").unwrap();
+            write!(call_args, "a{i}, ").unwrap();
+            wrapper_arg_kinds.push((i, true));
         } else {
             write!(wrapper_params, "p{i}: *const {arg_ty_str}, ").unwrap();
             write!(call_args, "*p{i}, ").unwrap();
-            by_ptr_args.push(i);
+            wrapper_arg_kinds.push((i, false));
         }
     }
     let Some(ret_ty_str) = printer.print(ret.layout().ty) else { return false };
+    let ret_is_unit = ret.layout().ty.is_unit();
+    let ret_by_value = ret_is_unit || passed_by_value(fx, ret.layout());
 
     let (target_features, feature_gates) = enclosing_target_features(fx);
 
@@ -185,8 +193,13 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
     if !target_features.is_empty() {
         writeln!(header, "#[target_feature(enable = \"{target_features}\")]").unwrap();
     }
-    let wrapper_fn =
-        format!("({wrapper_params}ret: *mut {ret_ty_str}) {{ *ret = f({call_args}); }}");
+    let wrapper_fn = if ret_is_unit {
+        format!("({wrapper_params}) {{ f({call_args}) }}")
+    } else if ret_by_value {
+        format!("({wrapper_params}) -> {ret_ty_str} {{ f({call_args}) }}")
+    } else {
+        format!("({wrapper_params}ret: *mut {ret_ty_str}) {{ *ret = f({call_args}); }}")
+    };
 
     // The name only depends on the codegen unit and the wrapper itself, which deduplicates
     // wrappers within the codegen unit.
@@ -207,33 +220,49 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
         fx.llvm_wrappers.insert(wrapper_name.clone(), LlvmWrapper { source, feature_gates });
     }
 
-    // Pass the arguments and the return value through stack slots.
+    // Pass the arguments in registers or through stack slots, as the wrapper expects.
+    let ptr_layout = fx.layout_of(Ty::new_mut_ptr(fx.tcx, fx.tcx.types.u8));
     let mut wrapper_args = Vec::new();
-    for i in by_ptr_args {
+    for (i, by_value) in wrapper_arg_kinds {
         let arg = codegen_operand(fx, &args[i].node);
-        let slot = CPlace::new_stack_slot(fx, arg.layout());
-        slot.write_cvalue(fx, arg);
-        wrapper_args.push(slot.to_ptr().get_addr(fx));
+        if by_value {
+            wrapper_args.push(arg);
+        } else {
+            let slot = CPlace::new_stack_slot(fx, arg.layout());
+            slot.write_cvalue(fx, arg);
+            wrapper_args.push(CValue::by_val(slot.to_ptr().get_addr(fx), ptr_layout));
+        }
     }
-    let ret_slot = CPlace::new_stack_slot(fx, ret.layout());
-    wrapper_args.push(ret_slot.to_ptr().get_addr(fx));
+    if ret_by_value {
+        crate::abi::codegen_extern_c_call(fx, &wrapper_name, &wrapper_args, ret);
+    } else {
+        let ret_slot = CPlace::new_stack_slot(fx, ret.layout());
+        wrapper_args.push(CValue::by_val(ret_slot.to_ptr().get_addr(fx), ptr_layout));
+        let unit_place = CPlace::new_stack_slot(fx, fx.layout_of(fx.tcx.types.unit));
+        crate::abi::codegen_extern_c_call(fx, &wrapper_name, &wrapper_args, unit_place);
 
-    let sig = Signature {
-        call_conv: fx.target_config.default_call_conv,
-        params: vec![AbiParam::new(fx.pointer_type); wrapper_args.len()],
-        returns: vec![],
-    };
-    let func_id = fx.module.declare_function(&wrapper_name, Linkage::Import, &sig).unwrap();
-    let func_ref = fx.module.declare_func_in_func(func_id, fx.bcx.func);
-    if fx.clif_comments.enabled() {
-        fx.add_comment(func_ref, intrinsic);
+        let value = ret_slot.to_cvalue(fx);
+        ret.write_cvalue(fx, value);
     }
-    fx.bcx.ins().call(func_ref, &wrapper_args);
-
-    let value = ret_slot.to_cvalue(fx);
-    ret.write_cvalue(fx, value);
 
     true
+}
+
+/// Whether values of the type are passed to and returned from wrappers in registers. Everything
+/// else, in particular vectors wider than 128 bits whose ABI depends on the target features, is
+/// passed by pointer.
+fn passed_by_value<'tcx>(fx: &FunctionCx<'_, '_, 'tcx>, layout: TyAndLayout<'tcx>) -> bool {
+    match *layout.ty.kind() {
+        ty::Bool | ty::RawPtr(..) | ty::Float(FloatTy::F32 | FloatTy::F64) => true,
+        ty::Int(IntTy::I128) | ty::Uint(UintTy::U128) => false,
+        ty::Int(_) | ty::Uint(_) => true,
+        // 64-bit vectors only exist as Neon registers.
+        ty::Adt(adt, _) if adt.repr().simd() => {
+            layout.size.bytes() == 16
+                || (layout.size.bytes() == 8 && fx.tcx.sess.target.arch == Arch::AArch64)
+        }
+        _ => false,
+    }
 }
 
 /// The target features enabled for the function being compiled, together with the feature gates

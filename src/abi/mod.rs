@@ -957,6 +957,47 @@ pub(crate) fn codegen_call_with_unwind_action(
     }
 }
 
+/// Calls the function `name`, which is defined elsewhere and uses the C ABI, with `args` and
+/// writes the return value to `ret`. The ABI is the one rustc computes for an `extern "C" fn`
+/// with the types of `args` and `ret`.
+pub(crate) fn codegen_extern_c_call<'tcx>(
+    fx: &mut FunctionCx<'_, '_, 'tcx>,
+    name: &str,
+    args: &[CValue<'tcx>],
+    ret: CPlace<'tcx>,
+) {
+    let fn_sig = fx.tcx.mk_fn_sig(
+        args.iter().map(|arg| arg.layout().ty),
+        ret.layout().ty,
+        ty::FnSigKind::default()
+            .set_abi(ExternAbi::C { unwind: false })
+            .set_safety(rustc_hir::Safety::Unsafe),
+    );
+    let fn_abi = FullyMonomorphizedLayoutCx(fx.tcx)
+        .fn_abi_of_fn_ptr(ty::Binder::dummy(fn_sig), ty::List::empty());
+    let sig = clif_sig_from_fn_abi(fx.tcx, fx.target_config.default_call_conv, fn_abi);
+    let func_id = declare_import_function(fx.tcx, fx.module, name, &sig);
+    let func_ref = fx.module.declare_func_in_func(func_id, fx.bcx.func);
+
+    self::returning::codegen_with_call_return_arg(fx, &fn_abi.ret, ret, |fx, return_ptr| {
+        let call_args = return_ptr
+            .into_iter()
+            .chain(args.iter().enumerate().flat_map(|(i, arg)| {
+                adjust_arg_for_abi(fx, *arg, &fn_abi.args[i], false).into_iter()
+            }))
+            .collect::<Vec<Value>>();
+
+        codegen_call_with_unwind_action(
+            fx,
+            fx.mir.span,
+            CallTarget::Direct(func_ref),
+            UnwindAction::Unreachable,
+            &call_args,
+            None,
+        )
+    });
+}
+
 pub(crate) fn lib_call_arg_param(tcx: TyCtxt<'_>, ty: Type, is_signed: bool) -> AbiParam {
     let param = AbiParam::new(ty);
     if ty.is_int() && u64::from(ty.bits()) < tcx.data_layout.pointer_size().bits() {

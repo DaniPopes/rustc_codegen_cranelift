@@ -26,7 +26,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
         }
 
         // Used by is_x86_feature_detected!();
-        "llvm.x86.xgetbv" => {
+        "llvm.x86.xgetbv" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (xcr_no); intrinsic);
 
             let xcr_no = xcr_no.load_scalar(fx);
@@ -434,7 +434,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             let cvalue = CValue::by_val(value, ret.layout());
             ret.write_cvalue(fx, cvalue);
         }
-        "llvm.x86.sse2.cvtps2dq" => {
+        "llvm.x86.sse2.cvtps2dq" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_cvtps_epi32
             intrinsic_args!(fx, args => (a); intrinsic);
             let a = a.load_scalar(fx);
@@ -719,7 +719,9 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
         "llvm.x86.sse42.crc32.32.8"
         | "llvm.x86.sse42.crc32.32.16"
         | "llvm.x86.sse42.crc32.32.32"
-        | "llvm.x86.sse42.crc32.64.64" => {
+        | "llvm.x86.sse42.crc32.64.64"
+            if !fx.llvm_fallback =>
+        {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#ig_expand=1419&text=_mm_crc32_u32
             intrinsic_args!(fx, args => (crc, v); intrinsic);
 
@@ -753,7 +755,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.sse42.pcmpestri128" => {
+        "llvm.x86.sse42.pcmpestri128" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_cmpestri&ig_expand=939
             intrinsic_args!(fx, args => (a, la, b, lb, _imm8); intrinsic);
 
@@ -806,7 +808,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.sse42.pcmpestrm128" => {
+        "llvm.x86.sse42.pcmpestrm128" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_cmpestrm&ig_expand=940
             intrinsic_args!(fx, args => (a, la, b, lb, _imm8); intrinsic);
 
@@ -855,7 +857,9 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.pclmulqdq" | "llvm.x86.pclmulqdq.256" | "llvm.x86.pclmulqdq.512" => {
+        "llvm.x86.pclmulqdq" | "llvm.x86.pclmulqdq.256" | "llvm.x86.pclmulqdq.512"
+            if !fx.llvm_fallback =>
+        {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_clmulepi64_si128&ig_expand=772
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_clmulepi64_epi128&ig_expand=752
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm512_clmulepi64_epi128&ig_expand=753
@@ -910,7 +914,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             }
         }
 
-        "llvm.x86.aesni.aeskeygenassist" => {
+        "llvm.x86.aesni.aeskeygenassist" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_aeskeygenassist_si128&ig_expand=261
             intrinsic_args!(fx, args => (a, _imm8); intrinsic);
 
@@ -943,7 +947,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.aesni.aesimc" => {
+        "llvm.x86.aesni.aesimc" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_aesimc_si128&ig_expand=260
             intrinsic_args!(fx, args => (a); intrinsic);
 
@@ -962,7 +966,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.aesni.aesenc" => {
+        "llvm.x86.aesni.aesenc" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_aesenc_si128&ig_expand=252
             intrinsic_args!(fx, args => (a, round_key); intrinsic);
 
@@ -988,7 +992,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.aesni.aesenclast" => {
+        "llvm.x86.aesni.aesenclast" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_aesenclast_si128&ig_expand=257
             intrinsic_args!(fx, args => (a, round_key); intrinsic);
 
@@ -1014,7 +1018,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.aesni.aesdec" => {
+        "llvm.x86.aesni.aesdec" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_aesdec_si128&ig_expand=242
             intrinsic_args!(fx, args => (a, round_key); intrinsic);
 
@@ -1040,7 +1044,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.aesni.aesdeclast" => {
+        "llvm.x86.aesni.aesdeclast" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_aesdeclast_si128&ig_expand=247
             intrinsic_args!(fx, args => (a, round_key); intrinsic);
 
@@ -1066,7 +1070,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.sha1rnds4" => {
+        "llvm.x86.sha1rnds4" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_sha1rnds4_epu32&ig_expand=5877
             intrinsic_args!(fx, args => (a, b, _func); intrinsic);
 
@@ -1104,7 +1108,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.sha1msg1" => {
+        "llvm.x86.sha1msg1" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_sha1msg1_epu32&ig_expand=5874
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
@@ -1130,7 +1134,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.sha1msg2" => {
+        "llvm.x86.sha1msg2" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_sha1msg2_epu32&ig_expand=5875
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
@@ -1156,7 +1160,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.sha1nexte" => {
+        "llvm.x86.sha1nexte" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_sha1nexte_epu32&ig_expand=5876
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
@@ -1182,7 +1186,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.sha256rnds2" => {
+        "llvm.x86.sha256rnds2" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_sha256rnds2_epu32&ig_expand=5977
             intrinsic_args!(fx, args => (a, b, k); intrinsic);
 
@@ -1214,7 +1218,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.sha256msg1" => {
+        "llvm.x86.sha256msg1" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_sha256msg1_epu32&ig_expand=5975
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
@@ -1240,7 +1244,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.x86.sha256msg2" => {
+        "llvm.x86.sha256msg2" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_sha256msg2_epu32&ig_expand=5976
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
@@ -1304,7 +1308,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             ret.write_cvalue(fx, res);
         }
 
-        "llvm.x86.rdtsc" => {
+        "llvm.x86.rdtsc" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_rdtsc&ig_expand=5273
 
             let res_place = CPlace::new_stack_slot(
@@ -1334,7 +1338,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             ret.write_cvalue_transmute(fx, res);
         }
 
-        "llvm.x86.vcvtps2ph.128" => {
+        "llvm.x86.vcvtps2ph.128" if !fx.llvm_fallback => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_cvtps_ph
             intrinsic_args!(fx, args => (a, _imm8); intrinsic);
             let a = a.load_scalar(fx);
