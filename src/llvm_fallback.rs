@@ -4,9 +4,10 @@
 //! intrinsic is generated. The wrappers of a codegen unit are compiled by the LLVM backend in the
 //! same subprocess that assembles the global asm of the codegen unit (see
 //! [`crate::global_asm::compile_global_asm`]). The Cranelift function then calls the wrapper like
-//! it calls inline asm wrappers: each argument that isn't a literal integer and the return value
-//! live in stack slots whose addresses are passed to the wrapper. Literal integers are baked into
-//! the wrapper as LLVM requires some arguments (`immarg`) to be constants.
+//! it calls inline asm wrappers, but with the C ABI: scalars and 128-bit vectors are passed and
+//! returned by value, everything else lives in stack slots whose addresses are passed to the
+//! wrapper. Literal integers are baked into the wrapper as LLVM requires some arguments
+//! (`immarg`) to be constants.
 
 use std::fmt::Write as _;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -248,23 +249,6 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
     true
 }
 
-/// Whether values of the type are passed to and returned from wrappers in registers. Everything
-/// else, in particular vectors wider than 128 bits whose ABI depends on the target features, is
-/// passed by pointer.
-fn passed_by_value<'tcx>(fx: &FunctionCx<'_, '_, 'tcx>, layout: TyAndLayout<'tcx>) -> bool {
-    match *layout.ty.kind() {
-        ty::Bool | ty::RawPtr(..) | ty::Float(FloatTy::F32 | FloatTy::F64) => true,
-        ty::Int(IntTy::I128) | ty::Uint(UintTy::U128) => false,
-        ty::Int(_) | ty::Uint(_) => true,
-        // 64-bit vectors only exist as Neon registers.
-        ty::Adt(adt, _) if adt.repr().simd() => {
-            layout.size.bytes() == 16
-                || (layout.size.bytes() == 8 && fx.tcx.sess.target.arch == Arch::AArch64)
-        }
-        _ => false,
-    }
-}
-
 /// The target features enabled for the function being compiled, together with the feature gates
 /// required to enable them.
 fn enclosing_target_features(fx: &FunctionCx<'_, '_, '_>) -> (String, Vec<String>) {
@@ -293,4 +277,25 @@ fn enclosing_target_features(fx: &FunctionCx<'_, '_, '_>) -> (String, Vec<String
         }
     }
     (features, gates)
+}
+
+/// Whether values of the type are passed to and returned from wrappers in registers. Everything
+/// else, in particular vectors wider than 128 bits whose ABI depends on the target features, is
+/// passed by pointer.
+fn passed_by_value<'tcx>(fx: &FunctionCx<'_, '_, 'tcx>, layout: TyAndLayout<'tcx>) -> bool {
+    match *layout.ty.kind() {
+        ty::Bool | ty::RawPtr(..) | ty::Float(FloatTy::F32 | FloatTy::F64) => true,
+        ty::Int(IntTy::I128) | ty::Uint(UintTy::U128) => false,
+        ty::Int(_) | ty::Uint(_) => true,
+        // Single lane vectors are passed as scalars by Cranelift but as vectors by LLVM. Only
+        // x86_64 and AArch64 are known to agree on vectors, and only AArch64 has 64-bit ones.
+        ty::Adt(adt, _) if adt.repr().simd() && layout.ty.simd_size_and_type(fx.tcx).0 > 1 => {
+            match fx.tcx.sess.target.arch {
+                Arch::X86_64 => layout.size.bytes() == 16,
+                Arch::AArch64 => matches!(layout.size.bytes(), 8 | 16),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }

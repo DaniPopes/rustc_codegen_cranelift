@@ -17,6 +17,10 @@ unsafe extern "llvm-intrinsic" {
     fn sadd_sat_i8(a: i8, b: i8) -> i8;
     #[link_name = "llvm.sadd.sat.i64"]
     fn sadd_sat_i64(a: i64, b: i64) -> i64;
+    #[link_name = "llvm.copysign.f32"]
+    fn copysign_f32(a: f32, b: f32) -> f32;
+    #[link_name = "llvm.copysign.f64"]
+    fn copysign_f64(a: f64, b: f64) -> f64;
     #[link_name = "llvm.ctlz.i32"]
     fn ctlz_i32(a: i32, is_zero_poison: bool) -> i32;
 }
@@ -28,6 +32,10 @@ fn main() {
     unsafe {
         test_pmulhuw();
         test_x86_sse42();
+        if is_x86_feature_detected!("f16c") {
+            test_x86_f16c();
+        }
+        test_x86_rdtsc();
         if is_x86_feature_detected!("sha")
             && is_x86_feature_detected!("sse4.1")
             && is_x86_feature_detected!("ssse3")
@@ -64,6 +72,7 @@ fn main() {
             test_neon_crypto();
         }
         test_neon_tbx();
+        test_neon_one_lane();
         test_neon_sqxtn();
         test_neon_ushl();
         test_neon_fmaxnm();
@@ -303,6 +312,8 @@ fn test_scalar_intrinsics() {
         assert_eq!(sadd_sat_i64(std::hint::black_box(i64::MAX), 1), i64::MAX);
         assert_eq!(ctlz_i32(std::hint::black_box(0x00f0_0000), true), 8);
         assert_eq!(ctlz_i32(std::hint::black_box(0), false), 32);
+        assert_eq!(copysign_f32(std::hint::black_box(1.5), -0.0), -1.5);
+        assert_eq!(copysign_f64(-2.5, std::hint::black_box(1.0)), 2.5);
     }
 }
 
@@ -552,4 +563,28 @@ unsafe fn test_neon_crypto() {
     );
     let g: float32x4_t = transmute([2.0f32, 0.5, 1.0, 3.0]);
     assert_eq!(transmute::<_, [f32; 4]>(vrecpsq_f32(f, g)), [-1.0, 3.25, -1.4999001, -5.5]);
+}
+
+// Single lane vectors are returned in vector registers, not in general purpose ones.
+#[cfg(target_arch = "aarch64")]
+unsafe fn test_neon_one_lane() {
+    let r: [i64; 1] = transmute(vqrshl_s64(transmute([5i64]), transmute([2i64])));
+    assert_eq!(r, [20]);
+    let r: [i64; 1] = transmute(vcvtn_s64_f64(transmute([-3.5f64])));
+    assert_eq!(r, [-4]);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "f16c")]
+unsafe fn test_x86_f16c() {
+    let a: [f32; 4] = [1.5, -2.25, 65504.0, 1e-8];
+    let r: [u16; 8] = transmute(_mm_cvtps_ph::<_MM_FROUND_TO_NEAREST_INT>(transmute(a)));
+    assert_eq!(r[..4], [0x3e00, 0xc080, 0x7bff, 0]);
+}
+
+#[cfg(target_arch = "x86_64")]
+unsafe fn test_x86_rdtsc() {
+    let first = _rdtsc();
+    let second = _rdtsc();
+    assert!(second >= first);
 }
