@@ -37,12 +37,12 @@ fn effort(level: OptLevel) -> u8 {
 
 /// The lowest [`OptLevel`] that is delegated to LLVM, or `None` if nothing is.
 ///
-/// The default is `z`, which delegates `z`, `s`, 2 and 3 but not 1.
+/// The default is `1`, which delegates every optimizing level.
 fn threshold() -> Result<Option<OptLevel>, String> {
     match env::var(OPT_LEVEL_ENV).as_deref() {
-        Err(env::VarError::NotPresent) | Ok("z") => Ok(Some(OptLevel::SizeMin)),
+        Err(env::VarError::NotPresent) | Ok("1") => Ok(Some(OptLevel::Less)),
         Ok("off") => Ok(None),
-        Ok("1") => Ok(Some(OptLevel::Less)),
+        Ok("z") => Ok(Some(OptLevel::SizeMin)),
         Ok("s") => Ok(Some(OptLevel::Size)),
         Ok("2") => Ok(Some(OptLevel::More)),
         Ok("3") => Ok(Some(OptLevel::Aggressive)),

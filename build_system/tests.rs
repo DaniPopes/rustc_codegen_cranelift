@@ -146,11 +146,11 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         }
     }),
     TestCase::custom("aot.llvm_delegate", &|runner| {
-        // Crates at opt-level 2 or higher are compiled by LLVM, the rest by Cranelift. The rest of
+        // Crates at opt-level 1 or higher are compiled by LLVM, the rest by Cranelift. The rest of
         // the test suite compiles everything with Cranelift, which this test overrides.
         let rustc = |args: &[&str]| {
             let mut cmd = runner.rustc_command(args);
-            cmd.env("CG_CLIF_LLVM_OPT_LEVEL", "2");
+            cmd.env("CG_CLIF_LLVM_OPT_LEVEL", "1");
             cmd.arg("--check-cfg=cfg(unwind)");
             if runner.panic_unwind_support {
                 cmd.args(["--cfg", "unwind"]);
