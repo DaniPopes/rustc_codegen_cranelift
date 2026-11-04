@@ -151,7 +151,12 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
 
         let const_val = crate::constant::mir_operand_get_const_val(fx, &arg.node);
         let literal = match (arg_ty.kind(), const_val) {
-            (ty::Int(_), Some(val)) => Some(format!("{}_{arg_ty_str}", val.to_int(val.size()))),
+            // Negation isn't available without `core`, so cast the bit pattern instead.
+            (ty::Int(int_ty), Some(val)) => Some(format!(
+                "{}_{} as {arg_ty_str}",
+                val.to_uint(val.size()),
+                int_ty.to_unsigned().name_str()
+            )),
             (ty::Uint(_), Some(val)) => Some(format!("{}_{arg_ty_str}", val.to_uint(val.size()))),
             (ty::Bool, Some(val)) => Some(val.try_to_bool().unwrap().to_string()),
             _ => None,

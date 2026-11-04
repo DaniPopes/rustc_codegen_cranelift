@@ -3,7 +3,8 @@
 // The test passes when compiled with the LLVM backend too, which is where the expected values come
 // from.
 
-#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(internal_features, unsafe_op_in_unsafe_fn)]
+#![feature(link_llvm_intrinsics)]
 
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
@@ -11,7 +12,18 @@ use std::arch::aarch64::*;
 use std::arch::x86_64::*;
 use std::mem::transmute;
 
+unsafe extern "llvm-intrinsic" {
+    #[link_name = "llvm.sadd.sat.i8"]
+    fn sadd_sat_i8(a: i8, b: i8) -> i8;
+    #[link_name = "llvm.sadd.sat.i64"]
+    fn sadd_sat_i64(a: i64, b: i64) -> i64;
+    #[link_name = "llvm.ctlz.i32"]
+    fn ctlz_i32(a: i32, is_zero_poison: bool) -> i32;
+}
+
 fn main() {
+    test_scalar_intrinsics();
+
     #[cfg(target_arch = "x86_64")]
     unsafe {
         test_pmulhuw();
@@ -255,5 +267,22 @@ unsafe fn test_neon_ld4_dup() {
     let r: [[i8; 16]; 4] = transmute([r.0, r.1, r.2, r.3]);
     for (i, lane) in r.iter().enumerate() {
         assert_eq!(*lane, [mem[i]; 16]);
+    }
+}
+
+// Negative and boolean literals, with and without a constant operand.
+fn test_scalar_intrinsics() {
+    unsafe {
+        let one = std::hint::black_box(1i8);
+        assert_eq!(sadd_sat_i8(-128, -1), -128);
+        assert_eq!(sadd_sat_i8(-100, -100), -128);
+        assert_eq!(sadd_sat_i8(100, 100), 127);
+        assert_eq!(sadd_sat_i8(-128, one), -127);
+        assert_eq!(sadd_sat_i8(one, -2), -1);
+        assert_eq!(sadd_sat_i64(-1, i64::MIN), i64::MIN);
+        assert_eq!(sadd_sat_i64(i64::MIN, 5), i64::MIN + 5);
+        assert_eq!(sadd_sat_i64(std::hint::black_box(i64::MAX), 1), i64::MAX);
+        assert_eq!(ctlz_i32(std::hint::black_box(0x00f0_0000), true), 8);
+        assert_eq!(ctlz_i32(std::hint::black_box(0), false), 32);
     }
 }
