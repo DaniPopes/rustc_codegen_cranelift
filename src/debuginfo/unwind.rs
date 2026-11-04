@@ -17,6 +17,7 @@ use crate::prelude::*;
 
 pub(crate) const EXCEPTION_HANDLER_CLEANUP: u32 = 0;
 pub(crate) const EXCEPTION_HANDLER_CATCH: u32 = 1;
+pub(crate) const EXCEPTION_HANDLER_TERMINATE: u32 = 2;
 
 pub(crate) struct UnwindContext {
     endian: RunTimeEndian,
@@ -161,6 +162,11 @@ impl UnwindContext {
                         .actions
                         .add(Action { kind: ActionKind::Catch(catch_type), next_action: None });
 
+                    // Like cg_llvm's terminate landing pads, those of `UnwindAction::Terminate` use an
+                    // empty filter. std's personality function enters filters in the search phase
+                    // but skips them during a forced unwind, unlike cleanups.
+                    let mut terminate_action = None;
+
                     for call_site in context.compiled_code().unwrap().buffer.call_sites() {
                         if call_site.exception_handlers.is_empty() {
                             gcc_except_table_data.call_sites.0.push(CallSite {
@@ -177,6 +183,14 @@ impl UnwindContext {
                                     let action_entry = match tag.as_u32() {
                                         EXCEPTION_HANDLER_CLEANUP => None,
                                         EXCEPTION_HANDLER_CATCH => Some(catch_action),
+                                        EXCEPTION_HANDLER_TERMINATE => {
+                                            Some(*terminate_action.get_or_insert_with(|| {
+                                                gcc_except_table_data.actions.add(Action {
+                                                    kind: ActionKind::Filter,
+                                                    next_action: None,
+                                                })
+                                            }))
+                                        }
                                         _ => unreachable!(),
                                     };
                                     gcc_except_table_data.call_sites.0.push(CallSite {

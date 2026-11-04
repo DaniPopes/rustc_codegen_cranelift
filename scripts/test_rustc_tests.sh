@@ -72,7 +72,6 @@ rm tests/ui/attributes/fn-align-dyn.rs # per-function alignment not supported
 rm -r tests/ui/explicit-tail-calls # tail calls
 rm -r tests/run-make/pointer-auth-link-with-c # pointer auth
 rm -r tests/ui/eii # EII not yet implemented
-rm -r tests/run-make/forced-unwind-terminate-pof # forced unwinding doesn't take precedence
 
 # requires LTO
 rm -r tests/ui/lto

@@ -16,7 +16,8 @@ impl GccExceptTable {
         // lpStartEncoding
         w.write_u8(DW_EH_PE_omit.0)?;
         // lpStart (omitted)
-        let type_info_padding = if self.type_info.type_info.is_empty() {
+        let type_info_padding = if self.type_info.type_info.is_empty() && !self.actions.has_filter()
+        {
             // ttypeEncoding
             w.write_u8(DW_EH_PE_omit.0)?;
             None
@@ -78,7 +79,11 @@ impl GccExceptTable {
         // type_info
         self.type_info.write(w, encoding)?;
 
-        // exception specs (unused for rust)
+        // exception specs
+        if self.actions.has_filter() {
+            // The only filter is the empty one, which consists of just the list terminator.
+            w.write_uleb128(0)?;
+        }
 
         // align to 4 bytes
         while !w.len().is_multiple_of(4) {
@@ -157,6 +162,10 @@ impl ActionTable {
         id
     }
 
+    fn has_filter(&self) -> bool {
+        self.actions.iter().any(|action| matches!(action.kind, ActionKind::Filter))
+    }
+
     fn encoded_size(&self) -> u64 {
         let mut len = LenWriter(0);
         self.write(&mut len).unwrap();
@@ -192,6 +201,8 @@ impl Action {
         // ttypeIndex
         let ttype_index = match self.kind {
             ActionKind::Catch(type_info_id) => type_info_id.0 as i64 + 1,
+            // Negative indices point into the exception specs, where -1 is the empty filter.
+            ActionKind::Filter => -1,
         };
         w.write_sleb128(ttype_index)?;
         // actionOffset
@@ -210,6 +221,7 @@ impl Action {
 #[derive(Copy, Clone)]
 pub(super) enum ActionKind {
     Catch(TypeInfoId),
+    Filter,
 }
 
 pub(super) struct TypeInfoTable {
