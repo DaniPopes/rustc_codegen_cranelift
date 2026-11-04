@@ -168,6 +168,7 @@ jobs:
         sed -i 's/jit./#jit./' config.txt
         sed -i 's/aot.powi_libcall_signature/#aot.powi_libcall_signature/' config.txt
         sed -i 's/aot.tls_conflicting_declarations/#aot.tls_conflicting_declarations/' config.txt
+        sed -i 's/aot.lto/#aot.lto/' config.txt
 
     - name: Test
       env:
