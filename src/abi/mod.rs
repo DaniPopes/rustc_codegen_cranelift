@@ -887,6 +887,9 @@ fn codegen_tail_call<'tcx>(
         with_no_trimmed_paths!(fx.add_post_comment(nop_inst, format!("abi: {:?}", fn_abi)));
     }
 
+    // FIXME Unwinding through a function that tail calls an `extern "tail"` function with more
+    // stack argument bytes than itself corrupts the stack, as Cranelift's unwind info doesn't
+    // account for the moved frame.
     match func_ref {
         CallTarget::Direct(func_ref) => {
             fx.bcx.ins().return_call(func_ref, &call_args);

@@ -40,6 +40,13 @@ pub(super) fn adjust_arg_abi_for_conv<'a, 'tcx>(
 
     let unit = Reg { kind: RegKind::Integer, size: tcx.data_layout.pointer_size() };
     let total = arg_abi.layout.size.align_to(tcx.data_layout.pointer_align());
+    // Cranelift pops the arguments of the `tail` calling convention with a 16 bit immediate.
+    if total.bytes() >= 1 << 15 {
+        tcx.dcx().fatal(format!(
+            "`extern \"tail\"` argument of type `{}` is too large for Cranelift",
+            arg_abi.layout.ty
+        ));
+    }
     let mut arg_abi = arg_abi.clone();
     arg_abi.cast_to(Uniform::new(unit, total));
     Cow::Owned(arg_abi)
