@@ -933,6 +933,18 @@ fn call_inline_asm<'tcx>(
         fx.add_comment(inline_asm_func, asm_name);
     }
 
+    // The wrapper loads whole registers; zero the slot so narrow inputs are zero-extended like LLVM.
+    if !inputs.is_empty() {
+        let zero = fx.bcx.ins().iconst(types::I64, 0);
+        for offset in (0..slot_size.bytes().next_multiple_of(16)).step_by(8) {
+            stack_slot.offset_i64(fx, i64::try_from(offset).unwrap()).store(
+                fx,
+                zero,
+                MemFlagsData::trusted(),
+            );
+        }
+    }
+
     for (offset, value) in inputs {
         stack_slot.offset(fx, i32::try_from(offset.bytes()).unwrap().into()).store(
             fx,

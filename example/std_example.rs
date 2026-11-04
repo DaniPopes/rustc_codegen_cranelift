@@ -174,6 +174,9 @@ fn main() {
 
     rust_call_abi();
 
+    #[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), not(jit)))]
+    test_inline_asm_narrow_inputs();
+
     // #[cfg(target_arch = "x86_64")]
     // inline_asm_call_custom_abi();
 
@@ -725,6 +728,37 @@ unsafe fn test_zmm_roundtrip() {
 
         assert_eq!(input, output);
     }
+}
+
+#[cfg(all(any(target_arch = "x86_64", target_arch = "aarch64"), not(jit)))]
+fn test_inline_asm_narrow_inputs() {
+    use std::arch::asm;
+    use std::hint::black_box;
+
+    #[inline(never)]
+    fn dirty_stack() {
+        let mut buf = [0xffu8; 512];
+        black_box(&mut buf);
+    }
+
+    macro_rules! check {
+        ($ty:ty, $val:expr) => {{
+            dirty_stack();
+            let x: $ty = black_box($val);
+            let out: u64;
+            unsafe {
+                #[cfg(target_arch = "x86_64")]
+                asm!("mov {out}, rsi", out = out(reg) out, in("rsi") x);
+                #[cfg(target_arch = "aarch64")]
+                asm!("mov {out}, x1", out = out(reg) out, in("x1") x);
+            }
+            assert_eq!(out, x as u64);
+        }};
+    }
+
+    check!(u16, 0xa5a5);
+    check!(u32, 0xa5a5_a5a5);
+    check!(u32, 0);
 }
 
 fn test_checked_mul() {
