@@ -10,6 +10,7 @@ build.mini_core
 build.example
 jit.mini_core_hello_world
 aot.mini_core_hello_world
+aot.macho_many_custom_sections
 
 testsuite.base_sysroot
 aot.arbitrary_self_types_pointers_and_wrappers
