@@ -79,15 +79,8 @@ rm -r tests/ui/lto
 for test in $(rg --files-with-matches "lto" tests/{codegen-units,ui,incremental}); do
   rm $test
 done
-rm -r tests/run-make/cdylib
-rm -r tests/run-make/codegen-options-parsing
-rm -r tests/run-make/lto-*
-rm -r tests/run-make/reproducible-build-2
-rm -r tests/run-make/no-builtins-lto
-rm -r tests/run-make/reachable-extern-fn-available-lto
+rm -r tests/run-make/lto-linkage-used-attr # global_asm! sym operands
 rm -r tests/run-make/no-builtins-linker-plugin-lto
-rm -r tests/run-make/fat-then-thin-lto
-rm -r tests/run-make/cross-lang-lto-upstream-rlibs
 rm -r tests/run-make/fat-lto-module-summary
 
 # coverage instrumentation
