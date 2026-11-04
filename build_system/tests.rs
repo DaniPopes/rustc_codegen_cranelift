@@ -74,8 +74,10 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         "example/arbitrary_self_types_pointers_and_wrappers.rs",
         &[],
     ),
+    TestCase::jit_bin("jit.catch_unwind", "example/catch_unwind.rs", ""),
     TestCase::jit_bin("jit.std_example", "example/std_example.rs", "arg"),
     TestCase::build_bin_and_run("aot.std_example", "example/std_example.rs", &["arg"]),
+    TestCase::build_bin_and_run("aot.catch_unwind", "example/catch_unwind.rs", &[]),
     TestCase::build_bin_and_run("aot.dst_field_align", "example/dst-field-align.rs", &[]),
     TestCase::build_bin_and_run(
         "aot.subslice-patterns-const-eval",

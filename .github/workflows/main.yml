@@ -76,6 +76,7 @@ jobs:
           - os: macos-latest
             env:
               TARGET_TUPLE: aarch64-apple-darwin
+            test_args: --panic-unwind-support
           - os: ubuntu-latest
             env:
               TARGET_TUPLE: s390x-unknown-linux-gnu
