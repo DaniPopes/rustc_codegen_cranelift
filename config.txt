@@ -7,6 +7,7 @@
 
 testsuite.no_sysroot
 build.mini_core
+build.eh_frame_encodings
 build.example
 jit.mini_core_hello_world
 aot.mini_core_hello_world

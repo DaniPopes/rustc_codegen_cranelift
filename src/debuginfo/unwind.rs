@@ -34,10 +34,13 @@ impl UnwindContext {
         let mut frame_table = FrameTable::default();
 
         let cie_id = if let Some(mut cie) = module.isa().create_systemv_cie() {
-            let ptr_encoding = if pic_eh_frame {
-                gimli::DwEhPe(gimli::DW_EH_PE_pcrel.0 | gimli::DW_EH_PE_sdata4.0)
-            } else {
+            let ptr_encoding = if !pic_eh_frame {
                 gimli::DW_EH_PE_absptr
+            } else if module.isa().triple().binary_format == BinaryFormat::Macho {
+                // Pointer sized pc-relative, like LLVM. Some linkers only accept this encoding.
+                gimli::DW_EH_PE_pcrel
+            } else {
+                gimli::DwEhPe(gimli::DW_EH_PE_pcrel.0 | gimli::DW_EH_PE_sdata4.0)
             };
 
             cie.fde_address_encoding = ptr_encoding;
@@ -66,7 +69,20 @@ impl UnwindContext {
                     gimli::DwEhPe(gimli::DW_EH_PE_indirect.0 | gimli::DW_EH_PE_absptr.0)
                 };
 
-                cie.lsda_encoding = Some(ptr_encoding);
+                // LLVM uses a pointer sized LSDA pointer on aarch64 ELF.
+                cie.lsda_encoding = Some(
+                    if pic_eh_frame
+                        && matches!(
+                            module.isa().triple().architecture,
+                            target_lexicon::Architecture::Aarch64(_)
+                        )
+                        && module.isa().triple().binary_format == BinaryFormat::Elf
+                    {
+                        gimli::DwEhPe(gimli::DW_EH_PE_pcrel.0 | gimli::DW_EH_PE_sdata8.0)
+                    } else {
+                        ptr_encoding
+                    },
+                );
 
                 // FIXME use eh_personality lang item instead
                 let personality = module

@@ -188,6 +188,7 @@ impl Writer for WriterRelocate {
             Address::Symbol { symbol, addend } => match eh_pe.application() {
                 gimli::DW_EH_PE_pcrel => {
                     let size = match eh_pe.format() {
+                        gimli::DW_EH_PE_absptr => size,
                         gimli::DW_EH_PE_sdata4 => 4,
                         gimli::DW_EH_PE_sdata8 => 8,
                         _ => return Err(gimli::write::Error::UnsupportedPointerEncoding(eh_pe)),
