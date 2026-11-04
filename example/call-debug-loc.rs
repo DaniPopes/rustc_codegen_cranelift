@@ -27,6 +27,11 @@ fn frame_location(backtrace: &str, function: &str) -> String {
 
 #[rustfmt::skip]
 fn main() {
+    // The cg_clif sysroot cannot capture backtraces on Windows yet.
+    if cfg!(windows) {
+        return;
+    }
+
     // The frame of a call reports the location of the call itself, not of the whole expression.
     let backtrace = Chain
         .step()
