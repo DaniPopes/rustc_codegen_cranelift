@@ -12,7 +12,6 @@ pub(crate) fn build_backend(
     dirs: &Dirs,
     bootstrap_host_compiler: &Compiler,
     use_unstable_features: bool,
-    panic_unwind_support: bool,
 ) -> PathBuf {
     let _group = LogGroup::guard("Build backend");
 
@@ -35,10 +34,6 @@ pub(crate) fn build_backend(
 
     if use_unstable_features {
         cmd.arg("--features").arg("unstable-features");
-    }
-
-    if panic_unwind_support {
-        cmd.arg("--features").arg("unwinding");
     }
 
     cmd.arg("--release");

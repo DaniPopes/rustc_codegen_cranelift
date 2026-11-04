@@ -7,6 +7,8 @@ use cranelift_module::DataId;
 use cranelift_object::ObjectProduct;
 use gimli::write::{Address, CieId, EhFrame, FrameTable, Section};
 use gimli::{Encoding, Format, RunTimeEndian};
+use rustc_session::Session;
+use rustc_target::spec::{Arch, PanicStrategy};
 
 use super::emit::{DebugRelocName, address_for_data, address_for_func};
 use super::gcc_except_table::{
@@ -18,14 +20,31 @@ use crate::prelude::*;
 pub(crate) const EXCEPTION_HANDLER_CLEANUP: u32 = 0;
 pub(crate) const EXCEPTION_HANDLER_CATCH: u32 = 1;
 
+/// Returns whether landing pads, personality and LSDA are emitted and `catch_unwind` catches.
+///
+/// This requires `-Cpanic=unwind` and a target for which [`UnwindContext`] can emit the needed
+/// `.eh_frame` and `.gcc_except_table`, which is ELF on x86_64 and aarch64.
+pub(crate) fn unwinding_enabled(sess: &Session) -> bool {
+    sess.panic_strategy() == PanicStrategy::Unwind
+        && matches!(sess.target.arch, Arch::X86_64 | Arch::AArch64)
+        && !sess.target.is_like_windows
+        && !sess.target.is_like_darwin
+}
+
 pub(crate) struct UnwindContext {
     endian: RunTimeEndian,
     frame_table: FrameTable,
     cie_id: Option<CieId>,
+    unwinding: bool,
 }
 
 impl UnwindContext {
-    pub(crate) fn new(module: &mut dyn Module, eh_personality: &str, pic_eh_frame: bool) -> Self {
+    pub(crate) fn new(
+        module: &mut dyn Module,
+        eh_personality: &str,
+        pic_eh_frame: bool,
+        unwinding: bool,
+    ) -> Self {
         let endian = match module.isa().endianness() {
             Endianness::Little => RunTimeEndian::Little,
             Endianness::Big => RunTimeEndian::Big,
@@ -42,7 +61,7 @@ impl UnwindContext {
             cie.fde_address_encoding = ptr_encoding;
 
             // FIXME only add personality function and lsda when necessary: https://github.com/rust-lang/rust/blob/1f76d219c906f0112bb1872f33aa977164c53fa6/compiler/rustc_codegen_ssa/src/mir/mod.rs#L200-L204
-            if cfg!(feature = "unwinding") {
+            if unwinding {
                 let code_ptr_encoding = if pic_eh_frame {
                     if module.isa().triple().architecture == target_lexicon::Architecture::X86_64 {
                         gimli::DwEhPe(
@@ -111,7 +130,7 @@ impl UnwindContext {
             None
         };
 
-        UnwindContext { endian, frame_table, cie_id }
+        UnwindContext { endian, frame_table, cie_id, unwinding }
     }
 
     pub(crate) fn add_function(
@@ -140,7 +159,7 @@ impl UnwindContext {
                 let mut fde = unwind_info.to_fde(address_for_func(func_id));
 
                 // FIXME only add personality function and lsda when necessary: https://github.com/rust-lang/rust/blob/1f76d219c906f0112bb1872f33aa977164c53fa6/compiler/rustc_codegen_ssa/src/mir/mod.rs#L200-L204
-                if cfg!(feature = "unwinding") {
+                if self.unwinding {
                     // FIXME use unique symbol name derived from function name
                     let lsda = module.declare_anonymous_data(false, false).unwrap();
 

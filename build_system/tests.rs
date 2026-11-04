@@ -145,6 +145,45 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             );
         }
     }),
+    TestCase::custom("aot.unwind", &|runner| {
+        if !runner.panic_unwind_support {
+            eprintln!("Unwinding is not supported on this target");
+            return;
+        }
+        runner.run_rustc(["example/unwind.rs"]);
+        runner.run_out_command("unwind", &[]);
+    }),
+    TestCase::custom("aot.unwind_abort", &|runner| {
+        if !runner.panic_unwind_support {
+            eprintln!("Unwinding is not supported on this target");
+            return;
+        }
+        runner.run_rustc(["example/unwind.rs"]);
+
+        for (arg, message) in [
+            ("abort-in-drop", "panic in a destructor during cleanup"),
+            ("abort-extern-c", "panic in a function that cannot unwind"),
+        ] {
+            let mut cmd = runner
+                .target_compiler
+                .run_with_runner(BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join("unwind"));
+            let output = cmd.arg(arg).output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                const SIGABRT: i32 = 6;
+                assert_eq!(
+                    output.status.signal(),
+                    Some(SIGABRT),
+                    "{arg}: unexpected exit:\n{stderr}"
+                );
+            }
+            assert!(!output.status.success(), "{arg}: expected abort, got success");
+            assert!(stderr.contains(message), "{arg}: expected `{message}`, got:\n{stderr}");
+        }
+    }),
     TestCase::build_bin_and_run("aot.issue-72793", "example/issue-72793.rs", &[]),
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),

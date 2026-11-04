@@ -32,8 +32,13 @@ OPTIONS:
             features. This includes the JIT mode and inline assembly support.
 
     --panic-unwind-support
-            Enable support for unwinding when -Cpanic=unwind is used. This currently regresses build
-            performance.
+            Build the sysroot with -Cpanic=unwind instead of -Cpanic=abort. This is the default on
+            targets where the backend supports unwinding: x86_64 and aarch64 ELF targets such as
+            Linux and FreeBSD. It is not yet supported on other targets, like Windows and macOS.
+
+    --no-panic-unwind-support
+            Build the sysroot with -Cpanic=abort and default the wrappers to it, even on targets
+            where unwinding is supported.
 
     --frozen
             Require Cargo.lock and cache are up to date
