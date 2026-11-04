@@ -149,6 +149,11 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
     TestCase::build_bin_and_run("aot.raw-dylib", "example/raw-dylib.rs", &[]),
+    TestCase::custom("aot.stack-slot-sharing", &|runner| {
+        // Storage markers, which slot sharing relies on, are only kept when optimizing.
+        runner.run_rustc(["example/stack-slot-sharing.rs", "-Copt-level=1"]);
+        runner.run_out_command("stack-slot-sharing", &[]);
+    }),
     TestCase::custom("test.sysroot", &|runner| {
         apply_patches(
             &runner.dirs,
