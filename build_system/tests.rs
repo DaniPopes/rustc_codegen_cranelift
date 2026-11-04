@@ -154,10 +154,7 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             &[
                 ("x86_64_v3", &["-Ctarget-cpu=x86-64-v3"]),
                 ("plus_avx2", &["-Ctarget-feature=+avx2"]),
-                (
-                    "x86_64_v3_minus_avx2",
-                    &["-Ctarget-cpu=x86-64-v3", "-Ctarget-feature=-avx2"],
-                ),
+                ("x86_64_v3_minus_avx2", &["-Ctarget-cpu=x86-64-v3", "-Ctarget-feature=-avx2"]),
                 ("znver5", &["-Ctarget-cpu=znver5"]),
                 ("native", &["-Ctarget-cpu=native"]),
             ]
