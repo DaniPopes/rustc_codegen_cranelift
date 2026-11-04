@@ -6,6 +6,12 @@ use std::hint::black_box;
 
 use callee::{fold, mix};
 
+macro_rules! check {
+    ($module:ident, $f:ident($($arg:expr),*), $expected:expr) => {
+        assert_eq!($f($($arg),*), $expected, "{}::{}", stringify!($module), stringify!($f))
+    };
+}
+
 macro_rules! check_abi {
     ($module:ident) => {{
         use callee::$module::*;
@@ -17,57 +23,36 @@ macro_rules! check_abi {
         let w = Wide(x, 11);
         let n = Narrow(12, y);
 
-        assert_eq!(
-            five_ints_i128_int(a, b, c, d, e, x, 9),
-            mix(&[a, b, c, d, e, fold(x), 9]),
-            "{}::five_ints_i128_int",
-            stringify!($module)
-        );
-        assert_eq!(
+        check!($module, five_ints_i128_int(a, b, c, d, e, x, 9), mix(&[a, b, c, d, e, fold(x), 9]));
+        check!(
+            $module,
             seven_ints_i128_int(a, b, c, d, e, f, g, x, 9),
-            mix(&[a, b, c, d, e, f, g, fold(x), 9]),
-            "{}::seven_ints_i128_int",
-            stringify!($module)
+            mix(&[a, b, c, d, e, f, g, fold(x), 9])
         );
-        assert_eq!(
-            int_i128_int_i128_int(a, x, b, y, c),
-            mix(&[a, fold(x), b, fold(y), c]),
-            "{}::int_i128_int_i128_int",
-            stringify!($module)
-        );
-        assert_eq!(
-            four_ints_wide_int(a, b, c, d, w, 13),
-            mix(&[a, b, c, d, fold(x), 11, 13]),
-            "{}::four_ints_wide_int",
-            stringify!($module)
-        );
-        assert_eq!(
+        check!($module, int_i128_int_i128_int(a, x, b, y, c), mix(&[a, fold(x), b, fold(y), c]));
+        check!($module, four_ints_wide_int(a, b, c, d, w, 13), mix(&[a, b, c, d, fold(x), 11, 13]));
+        check!(
+            $module,
             five_ints_wide_int(a, b, c, d, e, w, 13),
-            mix(&[a, b, c, d, e, fold(x), 11, 13]),
-            "{}::five_ints_wide_int",
-            stringify!($module)
+            mix(&[a, b, c, d, e, fold(x), 11, 13])
         );
-        assert_eq!(
+        check!(
+            $module,
             four_ints_narrow_int(a, b, c, d, n, 13),
-            mix(&[a, b, c, d, 12, fold(y), 13]),
-            "{}::four_ints_narrow_int",
-            stringify!($module)
+            mix(&[a, b, c, d, 12, fold(y), 13])
         );
-        assert_eq!(
+        check!(
+            $module,
             five_ints_narrow_int(a, b, c, d, e, n, 13),
-            mix(&[a, b, c, d, e, 12, fold(y), 13]),
-            "{}::five_ints_narrow_int",
-            stringify!($module)
+            mix(&[a, b, c, d, e, 12, fold(y), 13])
         );
-        assert_eq!(
+        check!(
+            $module,
             stack_alignment(a, b, c, d, e, f, g, h, i, x, j, y),
-            mix(&[a, b, c, d, e, f, g, h, i as u64, fold(x), j as u64, fold(y)]),
-            "{}::stack_alignment",
-            stringify!($module)
+            mix(&[a, b, c, d, e, f, g, h, i as u64, fold(x), j as u64, fold(y)])
         );
 
-        let r = ret_i128(a);
-        assert_eq!(r, ((a as u128) << 64) | (a as u128 * 3), "{}::ret_i128", stringify!($module));
+        check!($module, ret_i128(a), ((a as u128) << 64) | (a as u128 * 3));
         let Wide(r, s) = ret_wide(a);
         assert_eq!((r, s), (ret_i128(a), a * 5), "{}::ret_wide", stringify!($module));
         let Narrow(s, r) = ret_narrow(a);
