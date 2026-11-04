@@ -149,6 +149,31 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
     TestCase::build_bin_and_run("aot.raw-dylib", "example/raw-dylib.rs", &[]),
+    TestCase::custom("aot.unwind-terminate", &|runner| {
+        // Needs unwinding and a pthread-based forced unwind.
+        if !runner.panic_unwind_support || !runner.target_compiler.target.contains("linux") {
+            eprintln!("[SKIP] unwind-terminate (unsupported target or panic=abort)");
+            return;
+        }
+
+        runner.run_rustc(["example/unwind-terminate-forced.rs"]);
+        runner.run_out_command("unwind-terminate-forced", &[]);
+
+        runner.run_rustc(["example/unwind-terminate-panic.rs"]);
+        let output = runner
+            .target_compiler
+            .run_with_runner(
+                BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join("unwind-terminate-panic"),
+            )
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "expected an abort, got success");
+        assert!(
+            stderr.contains("panic in a function that cannot unwind"),
+            "expected the terminate landing pad to run, got:\n{stderr}"
+        );
+    }),
     TestCase::custom("test.sysroot", &|runner| {
         apply_patches(
             &runner.dirs,
