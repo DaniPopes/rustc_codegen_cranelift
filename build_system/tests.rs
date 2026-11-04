@@ -154,6 +154,17 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         runner.run_rustc(["example/stack-slot-sharing.rs", "-Copt-level=1"]);
         runner.run_out_command("stack-slot-sharing", &[]);
     }),
+    TestCase::custom("aot.slot-coalescing", &|runner| {
+        let run = |flags: &[&str]| {
+            runner
+                .run_rustc(["example/slot-coalescing.rs"].into_iter().chain(flags.iter().copied()));
+            runner.run_out_command("slot-coalescing", &[]);
+        };
+        run(&["-Copt-level=0"]);
+        run(&["-Copt-level=1"]);
+        // MIR optimizations merge most moves between locals, so turn them off.
+        run(&["-Copt-level=1", "-Zmir-enable-passes=-DestinationPropagation"]);
+    }),
     TestCase::custom("test.sysroot", &|runner| {
         apply_patches(
             &runner.dirs,

@@ -26,6 +26,7 @@ aot.issue-59326
 aot.gen_block_iterate
 aot.raw-dylib
 aot.stack-slot-sharing
+aot.slot-coalescing
 test.sysroot
 
 testsuite.extended_sysroot
