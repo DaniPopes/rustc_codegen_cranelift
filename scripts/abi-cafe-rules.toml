@@ -6,12 +6,45 @@
 'OptionU128::conv_rust::repr_c::rustc_caller'.busted = "run"
 'OptionU128::conv_rust::repr_c::cgclif_caller'.busted = "check"
 
+[target.'cfg(all(target_arch = "x86_64", not(windows)))']
+# A 128-bit integer that doesn't fit in the remaining integer registers is passed on the stack, and
+# Cranelift also uses up the register that is left, so the next integer argument is read from the
+# wrong place.
+'Exhaust_i128'.busted = "check"
+'Exhaust_u128'.busted = "check"
+
+# An aggregate with an alignment of 16 bytes that is passed on the stack is placed at an 8-byte
+# aligned offset by Cranelift, because the stack argument purpose has no alignment.
+'Exhaust_Align16U64::conv_c'.busted = "check"
+'Exhaust_Align16U8::conv_c'.busted = "check"
+'Exhaust_F128x1::conv_c::repr_c::rustc_calls_cgclif'.busted = "check"
+'Exhaust_F128x1::conv_c::repr_c::cgclif_calls_rustc'.busted = "check"
+'Exhaust_F128x1::conv_c::repr_c::cgclif_calls_cc'.busted = "check"
+'Exhaust_F128x1::conv_c::repr_c::cc_calls_cgclif'.busted = "check"
+'Exhaust_UnionU128F64::conv_c'.busted = "check"
+
+# Both of the above.
+'Exhaust_OptionI128::conv_c::repr_rust::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionI128::conv_c::repr_c::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionI128::conv_c::repr_rust::cgclif_calls_rustc'.busted = "check"
+'Exhaust_OptionI128::conv_c::repr_c::cgclif_calls_rustc'.busted = "check"
+'Exhaust_OptionI128::conv_rust::repr_rust::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionI128::conv_rust::repr_c::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionI128::conv_rust::repr_rust::cgclif_calls_rustc'.busted = "check"
+'Exhaust_OptionI128::conv_rust::repr_c::cgclif_calls_rustc'.busted = "check"
+'Exhaust_U128F64'.busted = "check"
+'Exhaust_U128U64'.busted = "check"
+'Exhaust_U64U128'.busted = "check"
+'Exhaust_U8U128'.busted = "check"
+'Exhaust_ZstBetween'.busted = "check"
+
 [target.'cfg(all(target_arch = "x86_64", target_env = "msvc"))']
 # ICE: https://github.com/rust-lang/rust/issues/164207
 'EmptyStruct::conv_c::repr_c::rustc_calls_cgclif'.run = "skip"
 
-[target.'*'.'f16']
-run = "skip"
-
-[target.'*'.'f128']
-run = "skip"
+# abi-cafe ignores the result of f16 with the C convention on x86_64 Linux, because the GCC of its CI
+# is too old to support _Float16. Rust to Rust does not involve GCC, so check those.
+[target.x86_64-unknown-linux-gnu.'f16::conv_c::rustc_calls_cgclif']
+pass = "check"
+[target.x86_64-unknown-linux-gnu.'f16::conv_c::cgclif_calls_rustc']
+pass = "check"

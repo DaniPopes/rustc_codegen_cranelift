@@ -1,0 +1,4 @@
+tagged "ResultF64U32" {
+  Ok { _ "f64"; }
+  Err { _ "u32"; }
+}

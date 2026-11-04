@@ -1,0 +1,4 @@
+tagged "OptionU64" {
+  Some { _ "u64"; }
+  None
+}

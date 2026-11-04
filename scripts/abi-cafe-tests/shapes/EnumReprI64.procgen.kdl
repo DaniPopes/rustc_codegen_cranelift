@@ -1,0 +1,6 @@
+@repr "i64"
+enum "EnumReprI64" {
+    "A"
+    "B"
+    "C"
+}

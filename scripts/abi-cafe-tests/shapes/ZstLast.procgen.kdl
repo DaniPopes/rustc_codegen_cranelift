@@ -1,0 +1,7 @@
+struct "ZstLast" {
+    _ "f32"
+    _ "EmptyStruct"
+}
+
+struct "EmptyStruct" {
+}
