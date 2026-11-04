@@ -23,6 +23,7 @@ aot.float-minmax-pass
 aot.powi_libcall_signature
 aot.tls_conflicting_declarations
 aot.issue-72793
+aot.mixed_backend_abi
 aot.issue-59326
 aot.gen_block_iterate
 aot.raw-dylib

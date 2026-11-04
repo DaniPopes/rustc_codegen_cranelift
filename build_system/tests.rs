@@ -176,6 +176,30 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         }
     }),
     TestCase::build_bin_and_run("aot.issue-72793", "example/issue-72793.rs", &[]),
+    // Call every function of a crate built with one backend from a crate built with the other one.
+    TestCase::custom("aot.mixed_backend_abi", &|runner| {
+        let backend_flag = |backend| (backend == "llvm").then_some("-Zcodegen-backend=llvm");
+        for (callee_backend, caller_backend) in [("llvm", "clif"), ("clif", "llvm")] {
+            let callee = format!("callee_{callee_backend}");
+            runner.run_rustc(
+                ["example/mixed-backend-abi-callee.rs", "--crate-type=rlib", "--crate-name"]
+                    .into_iter()
+                    .chain([callee.as_str()])
+                    .chain(backend_flag(callee_backend)),
+            );
+
+            let caller = format!("mixed_backend_abi_{callee_backend}");
+            let callee_rlib =
+                BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join(format!("lib{callee}.rlib"));
+            runner.run_rustc(
+                ["example/mixed-backend-abi.rs", "--crate-name", caller.as_str(), "--extern"]
+                    .into_iter()
+                    .chain([format!("callee={}", callee_rlib.display()).as_str()])
+                    .chain(backend_flag(caller_backend)),
+            );
+            runner.run_out_command(&caller, &[]);
+        }
+    }),
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
     TestCase::build_bin_and_run("aot.raw-dylib", "example/raw-dylib.rs", &[]),
