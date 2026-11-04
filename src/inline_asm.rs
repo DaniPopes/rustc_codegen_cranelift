@@ -913,8 +913,8 @@ fn call_inline_asm<'tcx>(
     inputs: Vec<(Size, Value)>,
     outputs: Vec<(Size, CPlace<'tcx>)>,
 ) {
-    let stack_slot =
-        fx.create_stack_slot(u32::try_from(slot_size.bytes().next_multiple_of(16)).unwrap(), 16);
+    let slot_size = slot_size.bytes().next_multiple_of(16);
+    let stack_slot = fx.create_stack_slot(u32::try_from(slot_size).unwrap(), 16);
 
     let inline_asm_func = fx
         .module
@@ -931,6 +931,18 @@ fn call_inline_asm<'tcx>(
     let inline_asm_func = fx.module.declare_func_in_func(inline_asm_func, fx.bcx.func);
     if fx.clif_comments.enabled() {
         fx.add_comment(inline_asm_func, asm_name);
+    }
+
+    // The wrapper loads whole registers; zero the slot so narrow inputs are zero-extended.
+    if !inputs.is_empty() {
+        let zero = fx.bcx.ins().iconst(types::I64, 0);
+        for offset in (0..slot_size).step_by(8) {
+            stack_slot.offset_i64(fx, i64::try_from(offset).unwrap()).store(
+                fx,
+                zero,
+                MemFlagsData::trusted(),
+            );
+        }
     }
 
     for (offset, value) in inputs {
