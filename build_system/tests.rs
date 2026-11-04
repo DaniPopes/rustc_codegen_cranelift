@@ -200,7 +200,8 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             ensure_empty_dir(&out_dir);
 
             let rustc = |backend: &str, args: &[&str]| {
-                let mut cmd = runner.rustc_command_in(&out_dir, &runner.target_compiler.target, [source]);
+                let mut cmd =
+                    runner.rustc_command_in(&out_dir, &runner.target_compiler.target, [source]);
                 cmd.arg("--check-cfg=cfg(callee, caller, variadic, variadic_float)");
                 if backend == "llvm" {
                     cmd.arg("-Zcodegen-backend=llvm");

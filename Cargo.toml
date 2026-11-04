@@ -24,12 +24,12 @@ smallvec = "1.8.1"
 
 [patch.crates-io]
 # Wasmtime 50.0.1 plus the Cranelift changes cg_clif needs, see the cg-clif-v50 branch.
-cranelift-codegen = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "212bcbcb909cef478bdec4ea09ad7521f8e6389b" }
-cranelift-frontend = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "212bcbcb909cef478bdec4ea09ad7521f8e6389b" }
-cranelift-module = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "212bcbcb909cef478bdec4ea09ad7521f8e6389b" }
-cranelift-native = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "212bcbcb909cef478bdec4ea09ad7521f8e6389b" }
-cranelift-jit = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "212bcbcb909cef478bdec4ea09ad7521f8e6389b" }
-cranelift-object = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "212bcbcb909cef478bdec4ea09ad7521f8e6389b" }
+cranelift-codegen = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "4d7961e9aa56411a076bfdbf8372bc84218980be" }
+cranelift-frontend = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "4d7961e9aa56411a076bfdbf8372bc84218980be" }
+cranelift-module = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "4d7961e9aa56411a076bfdbf8372bc84218980be" }
+cranelift-native = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "4d7961e9aa56411a076bfdbf8372bc84218980be" }
+cranelift-jit = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "4d7961e9aa56411a076bfdbf8372bc84218980be" }
+cranelift-object = { git = "https://github.com/DaniPopes/wasmtime.git", rev = "4d7961e9aa56411a076bfdbf8372bc84218980be" }
 
 # Uncomment to use local checkout of cranelift
 #cranelift-codegen = { path = "../wasmtime/cranelift/codegen" }

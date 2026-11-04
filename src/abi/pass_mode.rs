@@ -114,7 +114,17 @@ impl<'tcx> ArgAbiExt<'tcx> for ArgAbi<'tcx, Ty<'tcx>> {
             },
             PassMode::Cast { ref cast, pad_i32_count } => {
                 assert_eq!(pad_i32_count, 0, "padding support not yet implemented");
-                cast_target_to_abi_params(cast).into_iter().map(|(_, param)| param).collect()
+                let mut params = cast_target_to_abi_params(cast)
+                    .into_iter()
+                    .map(|(_, param)| param)
+                    .collect::<SmallVec<[_; 2]>>();
+                if params.len() > 1 {
+                    // The parts of the aggregate are all passed in registers or all on the stack.
+                    let count = u32::try_from(params.len()).unwrap();
+                    let align = u32::try_from(self.layout.align.abi.bytes()).unwrap();
+                    params[0].purpose = ArgumentPurpose::AggregateStart(count, align);
+                }
+                params
             }
             PassMode::Indirect { attrs, address_space: _, mode } => {
                 assert!(
