@@ -564,29 +564,22 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
                 let is_shift_zero = codegen_icmp_imm(fx, IntCC::Equal, shift_lane, 0);
                 let inv_shift = fx.bcx.ins().isub(bits_val, shift_lane);
 
-                let res = match intrinsic {
-                    sym::simd_funnel_shl => {
-                        let hi = fx.bcx.ins().ishl(a_lane, shift_lane);
-                        let lo = fx.bcx.ins().ushr(b_lane, inv_shift);
-                        fx.bcx.ins().bor(hi, lo)
-                    }
-                    sym::simd_funnel_shr => {
-                        let hi = fx.bcx.ins().ishl(a_lane, inv_shift);
-                        let lo = fx.bcx.ins().ushr(b_lane, shift_lane);
-                        fx.bcx.ins().bor(hi, lo)
-                    }
+                // A shift by 0 would compute `inv_shift == bits`, which Cranelift masks to 0.
+                let (hi, lo, zero_shift_res) = match intrinsic {
+                    sym::simd_funnel_shl => (
+                        fx.bcx.ins().ishl(a_lane, shift_lane),
+                        fx.bcx.ins().ushr(b_lane, inv_shift),
+                        a_lane,
+                    ),
+                    sym::simd_funnel_shr => (
+                        fx.bcx.ins().ishl(a_lane, inv_shift),
+                        fx.bcx.ins().ushr(b_lane, shift_lane),
+                        b_lane,
+                    ),
                     _ => unreachable!(),
                 };
-
-                let res = fx.bcx.ins().select(
-                    is_shift_zero,
-                    match intrinsic {
-                        sym::simd_funnel_shl => a_lane,
-                        sym::simd_funnel_shr => b_lane,
-                        _ => unreachable!(),
-                    },
-                    res,
-                );
+                let res = fx.bcx.ins().bor(hi, lo);
+                let res = fx.bcx.ins().select(is_shift_zero, zero_shift_res, res);
 
                 ret.place_lane(fx, lane).write_cvalue(fx, CValue::by_val(res, res_lane_layout));
             }
