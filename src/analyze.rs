@@ -594,15 +594,12 @@ fn moves_of<'tcx>(
                 }
             }
             if source_candidate != dest_candidate && layout.size == layout_of(dest).size {
-                let mv = Move { inner: dest_candidate, outer: source_candidate, offset };
-                if place.projection.is_empty() {
-                    moves.push((
-                        source,
-                        Move { inner: source_candidate, outer: dest_candidate, offset: 0 },
-                    ));
+                let mv = if place.projection.is_empty() {
+                    Move { inner: source_candidate, outer: dest_candidate, offset: 0 }
                 } else {
-                    moves.push((source, mv));
-                }
+                    Move { inner: dest_candidate, outer: source_candidate, offset }
+                };
+                moves.push((source, mv));
             }
         }
         _ => {}

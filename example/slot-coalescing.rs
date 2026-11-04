@@ -4,7 +4,8 @@
 // call while the last one is live. Without coalescing it needs about 3 MiB of stack and
 // overflows the 1 MiB thread stack; with it it needs about 0.45 MiB. `recurse_wrapped` moves a
 // buffer into and out of enum variants, which are placed at the field, so each frame needs one
-// buffer instead of two. The checks make sure values survive wherever two locals do overlap.
+// buffer instead of two: about 0.7 MiB for the whole recursion instead of 1.3 MiB. The checks
+// make sure values survive wherever two locals do overlap.
 
 #![feature(custom_mir, core_intrinsics)]
 
