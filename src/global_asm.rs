@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 
 use rustc_ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_codegen_ssa::traits::{AsmCodegenMethods, GlobalAsmOperandRef};
+use rustc_data_structures::fx::FxIndexSet;
 use rustc_middle::mir::interpret::{GlobalAlloc, PointerArithmetic, Scalar as ConstScalar};
 use rustc_middle::ty::TyCtxt;
 use rustc_middle::ty::layout::{
@@ -16,6 +17,7 @@ use rustc_middle::ty::layout::{
 use rustc_session::Session;
 use rustc_target::asm::InlineAsmArch;
 
+use crate::llvm_fallback::{LlvmWrappers, SUBPROCESS_AVAILABLE};
 use crate::prelude::*;
 
 pub(crate) struct GlobalAsmContext<'a, 'tcx> {
@@ -193,6 +195,8 @@ fn codegen_global_asm_inner<'tcx>(
 pub(crate) struct GlobalAsmConfig {
     assembler: PathBuf,
     target: String,
+    target_cpu: Option<String>,
+    target_feature: String,
 }
 
 impl GlobalAsmConfig {
@@ -205,16 +209,57 @@ impl GlobalAsmConfig {
                     path_for_rustdoc.to_str().unwrap().to_owned()
                 }
             },
+            target_cpu: sess.opts.cg.target_cpu.clone(),
+            target_feature: sess.opts.cg.target_feature.clone(),
         }
     }
 }
 
+/// Lang items needed by the `#![no_core]` crate compiled by the LLVM backend.
+const NO_CORE_PRELUDE: &str = r####"
+#[lang = "pointee_sized"]
+pub trait PointeeSized {}
+#[lang = "meta_sized"]
+pub trait MetaSized: PointeeSized {}
+#[lang = "sized"]
+pub trait Sized: MetaSized {}
+#[lang = "freeze"]
+pub unsafe auto trait Freeze {}
+#[lang = "unpin"]
+pub auto trait Unpin {}
+#[lang = "unsafe_unpin"]
+pub unsafe auto trait UnsafeUnpin {}
+#[lang = "copy"]
+pub trait Copy {}
+impl Copy for bool {}
+impl Copy for i8 {}
+impl Copy for i16 {}
+impl Copy for i32 {}
+impl Copy for i64 {}
+impl Copy for i128 {}
+impl Copy for isize {}
+impl Copy for u8 {}
+impl Copy for u16 {}
+impl Copy for u32 {}
+impl Copy for u64 {}
+impl Copy for u128 {}
+impl Copy for usize {}
+impl Copy for f16 {}
+impl Copy for f32 {}
+impl Copy for f64 {}
+impl Copy for f128 {}
+impl<T: PointeeSized> Copy for *const T {}
+impl<T: PointeeSized> Copy for *mut T {}
+"####;
+
+/// Compiles `global_asm` and `llvm_wrappers` into an object file using the LLVM backend.
 pub(crate) fn compile_global_asm(
     config: &GlobalAsmConfig,
     global_asm: String,
+    llvm_wrappers: LlvmWrappers,
     global_asm_object_file: &Path,
 ) -> Result<(), String> {
-    assert!(!global_asm.is_empty());
+    assert!(!global_asm.is_empty() || !llvm_wrappers.is_empty());
 
     // Remove all LLVM style comments
     let mut global_asm = global_asm
@@ -225,7 +270,9 @@ pub(crate) fn compile_global_asm(
     global_asm.push('\n');
 
     // Assemble `global_asm`
-    if option_env!("CG_CLIF_FORCE_GNU_AS").is_some() {
+    if !SUBPROCESS_AVAILABLE {
+        assert!(llvm_wrappers.is_empty());
+
         let mut child = Command::new(&config.assembler)
             .arg("-o")
             .arg(&global_asm_object_file)
@@ -238,10 +285,62 @@ pub(crate) fn compile_global_asm(
             return Err(format!("Failed to assemble `{}`", global_asm));
         }
     } else {
-        // Escape { and }
-        let global_asm = global_asm.replace('{', "{{").replace('}', "}}");
+        let mut source = String::new();
 
-        let mut child = Command::new(std::env::current_exe().unwrap())
+        let mut feature_gates = FxIndexSet::default();
+        feature_gates.extend(
+            [
+                "decl_macro",
+                "no_core",
+                "rustc_attrs",
+                "f16",
+                "f128",
+                "lang_items",
+                "auto_traits",
+                "repr_simd",
+                "simd_ffi",
+                "link_llvm_intrinsics",
+            ]
+            .map(str::to_owned),
+        );
+        for wrapper in llvm_wrappers.values() {
+            feature_gates.extend(wrapper.feature_gates.iter().cloned());
+        }
+        let feature_gates = feature_gates.into_iter().collect::<Vec<_>>().join(", ");
+        writeln!(source, "#![feature({feature_gates})]").unwrap();
+        source.push_str(
+            "#![allow(internal_features, non_snake_case)]\n\
+             #![allow(improper_ctypes, improper_ctypes_definitions)]\n\
+             #![no_core]\n",
+        );
+        source.push_str(NO_CORE_PRELUDE);
+
+        if !global_asm.is_empty() {
+            // Escape { and }
+            let global_asm = global_asm.replace('{', "{{").replace('}', "}}");
+
+            source.push_str(
+                r####"
+                #[rustc_builtin_macro]
+                #[rustc_macro_transparency = "semiopaque"]
+                macro global_asm() { /* compiler built-in */ }
+                global_asm!(r###"
+                "####,
+            );
+            source.push_str(&global_asm);
+            source.push_str(
+                r####"
+                "###);
+                "####,
+            );
+        }
+
+        for wrapper in llvm_wrappers.values() {
+            source.push_str(&wrapper.source);
+        }
+
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
             // Avoid a warning about the jobserver fd not being passed
             .env_remove("CARGO_MAKEFLAGS")
             .arg("--target")
@@ -257,36 +356,31 @@ pub(crate) fn compile_global_asm(
             .arg("-Zcodegen-backend=llvm")
             // JSON targets currently require `-Zunstable-options`
             // Tracking issue: https://github.com/rust-lang/rust/issues/151528
-            .arg("-Zunstable-options")
+            .arg("-Zunstable-options");
+        if !llvm_wrappers.is_empty() {
+            command.arg("-Copt-level=1");
+            // The wrappers enable the target features of the functions calling them on top of
+            // those of the session.
+            if let Some(target_cpu) = &config.target_cpu {
+                command.arg(format!("-Ctarget-cpu={target_cpu}"));
+            }
+            if !config.target_feature.is_empty() {
+                command.arg(format!("-Ctarget-feature={}", config.target_feature));
+            }
+        }
+        let mut child = command
             .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("Failed to spawn `as`.");
-        let mut stdin = child.stdin.take().unwrap();
-        stdin
-            .write_all(
-                br####"
-                #![feature(decl_macro, no_core, rustc_attrs)]
-                #![allow(internal_features)]
-                #![no_core]
-                #[rustc_builtin_macro]
-                #[rustc_macro_transparency = "semiopaque"]
-                macro global_asm() { /* compiler built-in */ }
-                global_asm!(r###"
-                "####,
-            )
-            .unwrap();
-        stdin.write_all(global_asm.as_bytes()).unwrap();
-        stdin
-            .write_all(
-                br####"
-                "###);
-                "####,
-            )
-            .unwrap();
-        std::mem::drop(stdin);
-        let status = child.wait().expect("Failed to wait for `as`.");
-        if !status.success() {
-            return Err(format!("Failed to assemble `{}`", global_asm));
+        child.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
+        let output = child.wait_with_output().expect("Failed to wait for `as`.");
+        if !output.status.success() {
+            return Err(format!(
+                "Failed to assemble `{}`\n{}",
+                source,
+                String::from_utf8_lossy(&output.stderr)
+            ));
         }
     }
 

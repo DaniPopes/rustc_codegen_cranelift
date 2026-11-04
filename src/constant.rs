@@ -1,7 +1,5 @@
 //! Handling of `static`s, `const`s and promoted allocations
 
-use std::cmp::Ordering;
-
 use cranelift_module::*;
 use rustc_const_eval::interpret::CTFE_ALLOC_SALT;
 use rustc_data_structures::fx::FxHashSet;
@@ -522,16 +520,7 @@ pub(crate) fn mir_operand_get_const_val<'tcx>(
                     match &stmt.kind {
                         StatementKind::Assign(local_and_rvalue) if &local_and_rvalue.0 == place => {
                             match &local_and_rvalue.1 {
-                                Rvalue::Cast(
-                                    CastKind::IntToInt
-                                    | CastKind::FloatToFloat
-                                    | CastKind::FloatToInt
-                                    | CastKind::IntToFloat
-                                    | CastKind::FnPtrToPtr
-                                    | CastKind::PtrToPtr,
-                                    operand,
-                                    ty,
-                                ) => {
+                                Rvalue::Cast(CastKind::IntToInt, operand, ty) => {
                                     if computed_scalar_int.is_some() {
                                         return None; // local assigned twice
                                     }
@@ -539,27 +528,25 @@ pub(crate) fn mir_operand_get_const_val<'tcx>(
                                         return None;
                                     }
                                     let scalar_int = mir_operand_get_const_val(fx, operand)?;
-                                    let scalar_int =
-                                        match fx.layout_of(*ty).size.cmp(&scalar_int.size()) {
-                                            Ordering::Equal => scalar_int,
-                                            Ordering::Less => match ty.kind() {
-                                                ty::Uint(_) => ScalarInt::try_from_uint(
-                                                    scalar_int.to_uint(scalar_int.size()),
-                                                    fx.layout_of(*ty).size,
-                                                )
-                                                .unwrap(),
-                                                ty::Int(_) => ScalarInt::try_from_int(
-                                                    scalar_int.to_int(scalar_int.size()),
-                                                    fx.layout_of(*ty).size,
-                                                )
-                                                .unwrap(),
-                                                _ => unreachable!(),
-                                            },
-                                            Ordering::Greater => return None,
+                                    // Sign extend if the source is signed, zero extend otherwise
+                                    // and truncate to the size of the target.
+                                    let bits =
+                                        match fx.monomorphize(operand.ty(fx.mir, fx.tcx)).kind() {
+                                            ty::Int(_) => {
+                                                scalar_int.to_int(scalar_int.size()).cast_unsigned()
+                                            }
+                                            _ => scalar_int.to_uint(scalar_int.size()),
                                         };
-                                    computed_scalar_int = Some(scalar_int);
+                                    let size = fx.layout_of(*ty).size;
+                                    computed_scalar_int = Some(
+                                        ScalarInt::try_from_uint(size.truncate(bits), size)
+                                            .unwrap(),
+                                    );
                                 }
                                 Rvalue::Use(operand, _) => {
+                                    if computed_scalar_int.is_some() {
+                                        return None; // local assigned twice
+                                    }
                                     computed_scalar_int = mir_operand_get_const_val(fx, operand)
                                 }
                                 _ => return None,

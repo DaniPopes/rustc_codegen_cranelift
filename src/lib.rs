@@ -69,6 +69,7 @@ mod global_asm;
 mod inline_asm;
 mod intrinsics;
 mod linkage;
+mod llvm_fallback;
 mod main_shim;
 mod num;
 mod optimize;

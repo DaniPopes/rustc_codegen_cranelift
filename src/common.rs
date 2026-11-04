@@ -299,6 +299,10 @@ pub(crate) struct FunctionCx<'m, 'clif, 'tcx: 'm> {
 
     pub(crate) inline_asm: String,
     pub(crate) inline_asm_index: u32,
+
+    /// Whether `llvm.*` intrinsics without native lowering can be compiled by LLVM.
+    pub(crate) llvm_fallback: bool,
+    pub(crate) llvm_wrappers: crate::llvm_fallback::LlvmWrappers,
 }
 
 impl<'tcx> LayoutOfHelpers<'tcx> for FunctionCx<'_, '_, 'tcx> {

@@ -1221,17 +1221,9 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
         }
 
         _ => {
-            fx.tcx.dcx().warn(format!(
-                "unsupported AArch64 llvm intrinsic {}; replacing with trap",
-                intrinsic
-            ));
-            let msg = format!(
-                "{intrinsic} is not yet supported.\n\
-                 See https://github.com/rust-lang/rustc_codegen_cranelift/issues/171\n\
-                 Please open an issue at https://github.com/rust-lang/rustc_codegen_cranelift/issues"
-            );
-            crate::base::codegen_panic_nounwind(fx, &msg, fx.mir.span);
-            return;
+            if !super::llvm::codegen_llvm_fallback_or_trap(fx, intrinsic, args, ret, fx.mir.span) {
+                return;
+            }
         }
     }
 

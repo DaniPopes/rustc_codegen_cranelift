@@ -29,6 +29,7 @@ use rustc_span::Symbol;
 use crate::base::CodegenedFunction;
 use crate::debuginfo::TypeDebugContext;
 use crate::global_asm::{GlobalAsmConfig, GlobalAsmContext};
+use crate::llvm_fallback::{LlvmWrappers, SUBPROCESS_AVAILABLE};
 use crate::prelude::*;
 use crate::unwind_module::UnwindModule;
 
@@ -39,6 +40,7 @@ pub(crate) struct AotModule {
     debug_context: Option<DebugContext>,
     codegened_functions: Vec<CodegenedFunction>,
     global_asm: String,
+    llvm_wrappers: LlvmWrappers,
 }
 
 fn make_module(tcx: TyCtxt<'_>, cgu_name: &str) -> AotModule {
@@ -81,6 +83,7 @@ fn make_module(tcx: TyCtxt<'_>, cgu_name: &str) -> AotModule {
         debug_context,
         codegened_functions,
         global_asm,
+        llvm_wrappers: LlvmWrappers::default(),
     }
 }
 
@@ -184,6 +187,7 @@ fn codegen_cgu(tcx: TyCtxt<'_>, cgu_name: Symbol) -> AotModule {
                     Function::new(),
                     &mut module.module,
                     instance,
+                    SUBPROCESS_AVAILABLE,
                 );
                 module.codegened_functions.push(codegened_function);
             }
@@ -231,6 +235,7 @@ fn compile_cgu(
                 &mut aot_module.module,
                 aot_module.debug_context.as_mut(),
                 &mut aot_module.global_asm,
+                &mut aot_module.llvm_wrappers,
                 codegened_func,
             );
         }
@@ -238,7 +243,7 @@ fn compile_cgu(
 
     let global_asm_object_file =
         prof.generic_activity_with_arg("compile assembly", &*cgu_name).run(|| {
-            if aot_module.global_asm.is_empty() {
+            if aot_module.global_asm.is_empty() && aot_module.llvm_wrappers.is_empty() {
                 return Ok::<_, String>(None);
             }
 
@@ -246,6 +251,7 @@ fn compile_cgu(
             crate::global_asm::compile_global_asm(
                 &aot_module.global_asm_config,
                 aot_module.global_asm,
+                aot_module.llvm_wrappers,
                 &global_asm_object_file,
             )?;
 

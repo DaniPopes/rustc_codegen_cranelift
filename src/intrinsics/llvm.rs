@@ -71,20 +71,36 @@ pub(crate) fn codegen_llvm_intrinsic_call<'tcx>(
         }
 
         _ => {
-            fx.tcx
-                .dcx()
-                .warn(format!("unsupported llvm intrinsic {}; replacing with trap", intrinsic));
-            let msg = format!(
-                "{intrinsic} is not yet supported.\n\
-                 See https://github.com/rust-lang/rustc_codegen_cranelift/issues/171\n\
-                 Please open an issue at https://github.com/rust-lang/rustc_codegen_cranelift/issues"
-            );
-            crate::base::codegen_panic_nounwind(fx, &msg, span);
-            return;
+            if !codegen_llvm_fallback_or_trap(fx, intrinsic, args, ret, span) {
+                return;
+            }
         }
     }
 
     let dest = target.expect("all llvm intrinsics used by stdlib should return");
     let ret_block = fx.get_block(dest);
     fx.bcx.ins().jump(ret_block, &[]);
+}
+
+/// Calls an `llvm.*` intrinsic without native lowering through a wrapper compiled by the LLVM
+/// backend. If that isn't possible a trap is emitted and `false` is returned.
+pub(super) fn codegen_llvm_fallback_or_trap<'tcx>(
+    fx: &mut FunctionCx<'_, '_, 'tcx>,
+    intrinsic: &str,
+    args: &[Spanned<mir::Operand<'tcx>>],
+    ret: CPlace<'tcx>,
+    span: Span,
+) -> bool {
+    if crate::llvm_fallback::codegen_llvm_fallback_call(fx, intrinsic, args, ret) {
+        return true;
+    }
+
+    fx.tcx.dcx().warn(format!("unsupported llvm intrinsic {}; replacing with trap", intrinsic));
+    let msg = format!(
+        "{intrinsic} is not yet supported.\n\
+         See https://github.com/rust-lang/rustc_codegen_cranelift/issues/171\n\
+         Please open an issue at https://github.com/rust-lang/rustc_codegen_cranelift/issues"
+    );
+    crate::base::codegen_panic_nounwind(fx, &msg, span);
+    false
 }

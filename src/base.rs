@@ -19,6 +19,7 @@ use rustc_span::Symbol;
 
 use crate::constant::ConstantCx;
 use crate::debuginfo::{FunctionDebugContext, TypeDebugContext};
+use crate::llvm_fallback::LlvmWrappers;
 use crate::prelude::*;
 use crate::pretty_clif::{CommentWriter, format_clif_ir_header};
 use crate::{codegen_f16_f128, enable_verifier};
@@ -30,6 +31,7 @@ pub(crate) struct CodegenedFunction {
     clif_comments: CommentWriter,
     func_debug_cx: Option<FunctionDebugContext>,
     inline_asm: String,
+    llvm_wrappers: LlvmWrappers,
 }
 
 pub(crate) fn codegen_fn<'tcx>(
@@ -40,6 +42,7 @@ pub(crate) fn codegen_fn<'tcx>(
     cached_func: Function,
     module: &mut dyn Module,
     instance: Instance<'tcx>,
+    llvm_fallback: bool,
 ) -> CodegenedFunction {
     debug_assert!(!instance.args.has_infer());
 
@@ -117,6 +120,9 @@ pub(crate) fn codegen_fn<'tcx>(
         clif_comments,
         inline_asm: String::new(),
         inline_asm_index: 0,
+
+        llvm_fallback,
+        llvm_wrappers: LlvmWrappers::default(),
     };
 
     tcx.prof.generic_activity("codegen clif ir").run(|| codegen_fn_body(&mut fx, start_block));
@@ -128,6 +134,7 @@ pub(crate) fn codegen_fn<'tcx>(
     let clif_comments = fx.clif_comments;
     let func_debug_cx = fx.func_debug_cx;
     let inline_asm = fx.inline_asm;
+    let llvm_wrappers = fx.llvm_wrappers;
 
     fx.constants_cx.finalize(fx.tcx, &mut *fx.module);
 
@@ -145,7 +152,15 @@ pub(crate) fn codegen_fn<'tcx>(
     // Verify function
     verify_func(tcx, &clif_comments, &func);
 
-    CodegenedFunction { symbol_name, func_id, func, clif_comments, func_debug_cx, inline_asm }
+    CodegenedFunction {
+        symbol_name,
+        func_id,
+        func,
+        clif_comments,
+        func_debug_cx,
+        inline_asm,
+        llvm_wrappers,
+    }
 }
 
 pub(crate) fn compile_fn(
@@ -157,12 +172,14 @@ pub(crate) fn compile_fn(
     module: &mut dyn Module,
     debug_context: Option<&mut DebugContext>,
     global_asm: &mut String,
+    llvm_wrappers: &mut LlvmWrappers,
     codegened_func: CodegenedFunction,
 ) {
     let _timer = prof.generic_activity_with_arg("compile function", &*codegened_func.symbol_name);
 
     let clif_comments = codegened_func.clif_comments;
     global_asm.push_str(&codegened_func.inline_asm);
+    llvm_wrappers.extend(codegened_func.llvm_wrappers);
 
     // Store function in context
     let context = cached_context;
