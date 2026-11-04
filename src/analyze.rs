@@ -5,7 +5,6 @@ use std::borrow::Cow;
 use rustc_index::IndexVec;
 use rustc_index::bit_set::{BitMatrix, DenseBitSet};
 use rustc_middle::mir::StatementKind::*;
-use rustc_middle::mir::traversal;
 use rustc_mir_dataflow::impls::{MaybeStorageLive, always_storage_live_locals};
 use rustc_mir_dataflow::{Analysis, ResultsVisitor, visit_results};
 
@@ -86,7 +85,12 @@ pub(crate) fn share_stack_slots<'tcx>(
         candidate_of_local,
         conflicts: BitMatrix::new(candidates.len(), candidates.len()),
     };
-    visit_results(fx.mir, traversal::reachable(fx.mir).map(|(bb, _)| bb), &results, &mut visitor);
+    visit_results(
+        fx.mir,
+        fx.mir.basic_blocks.reverse_postorder().iter().copied(),
+        &results,
+        &mut visitor,
+    );
     let mut conflicts = visitor.conflicts;
 
     // Greedily put every candidate into the first slot without a conflicting member. The row of
