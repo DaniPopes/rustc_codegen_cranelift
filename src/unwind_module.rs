@@ -7,26 +7,63 @@ use cranelift_module::{
     ModuleReloc, ModuleResult,
 };
 use cranelift_object::{ObjectModule, ObjectProduct};
+use target_lexicon::BinaryFormat;
 
 use crate::UnwindContext;
 
-/// A wrapper around a [Module] which adds any defined function to the [UnwindContext].
+/// A wrapper around a [Module] which adds any defined function to the [UnwindContext] and resolves
+/// LLVM's `\x01` verbatim symbol name prefix.
 pub(crate) struct UnwindModule<T> {
     pub(crate) module: T,
     unwind_context: UnwindContext,
+    /// Whether `object` and the dynamic loader add a `_` prefix to every symbol name.
+    underscore_prefix: bool,
 }
 
 impl<T: Module> UnwindModule<T> {
     pub(crate) fn new(mut module: T, eh_personality: &str, pic_eh_frame: bool) -> Self {
         let unwind_context = UnwindContext::new(&mut module, eh_personality, pic_eh_frame);
-        UnwindModule { module, unwind_context }
+        let underscore_prefix = module.isa().triple().binary_format == BinaryFormat::Macho;
+        UnwindModule { module, unwind_context, underscore_prefix }
+    }
+
+    /// Turns a `\x01`-prefixed name, which names the symbol exactly, into the name that becomes
+    /// that symbol once the `_` prefix is added again. Returns `name` unchanged if it isn't
+    /// verbatim or if the prefix can't be added to a name without it.
+    fn strip_verbatim_prefix<'a>(&self, name: &'a str) -> &'a str {
+        let Some(verbatim) = name.strip_prefix('\x01') else { return name };
+        if self.underscore_prefix { verbatim.strip_prefix('_').unwrap_or(name) } else { verbatim }
     }
 }
 
 impl UnwindModule<ObjectModule> {
     pub(crate) fn finish(self) -> ObjectProduct {
+        // Verbatim names that `strip_verbatim_prefix` left alone get the prefix added by `object`
+        // regardless, so they are renamed once the object exists.
+        let is_verbatim = |name: &String| self.underscore_prefix && name.starts_with('\x01');
+        let declarations = self.module.declarations();
+        let functions = declarations
+            .get_functions()
+            .filter(|(_, decl)| decl.name.as_ref().is_some_and(is_verbatim))
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        let data_objects = declarations
+            .get_data_objects()
+            .filter(|(_, decl)| decl.name.as_ref().is_some_and(is_verbatim))
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+
         let mut product = self.module.finish();
         self.unwind_context.emit(&mut product);
+
+        let symbols = functions
+            .into_iter()
+            .filter_map(|id| product.functions[id])
+            .chain(data_objects.into_iter().filter_map(|id| product.data_objects[id]));
+        for (symbol, _) in symbols {
+            // Drop the `_` prefix and the `\x01`.
+            product.object.symbol_mut(symbol).name.drain(..2);
+        }
         product
     }
 }
@@ -50,7 +87,7 @@ impl<T: Module> Module for UnwindModule<T> {
     }
 
     fn get_name(&self, name: &str) -> Option<FuncOrDataId> {
-        self.module.get_name(name)
+        self.module.get_name(self.strip_verbatim_prefix(name))
     }
 
     fn target_config(&self) -> TargetFrontendConfig {
@@ -63,6 +100,7 @@ impl<T: Module> Module for UnwindModule<T> {
         linkage: Linkage,
         signature: &Signature,
     ) -> ModuleResult<FuncId> {
+        let name = self.strip_verbatim_prefix(name);
         self.module.declare_function(name, linkage, signature)
     }
 
@@ -77,6 +115,7 @@ impl<T: Module> Module for UnwindModule<T> {
         writable: bool,
         tls: bool,
     ) -> ModuleResult<DataId> {
+        let name = self.strip_verbatim_prefix(name);
         self.module.declare_data(name, linkage, writable, tls)
     }
 
