@@ -5,6 +5,10 @@ set -e
 # the LLVM backend isn't compiled in here.
 export CG_CLIF_FORCE_GNU_AS=1
 
+# The tests are meant to run on Cranelift even when they are compiled with optimizations, and
+# there is no LLVM backend to delegate to.
+export CG_CLIF_LLVM_OPT_LEVEL=off
+
 # Compiletest expects all standard library paths to start with /rustc/FAKE_PREFIX.
 # CG_CLIF_STDLIB_REMAP_PATH_PREFIX will cause cg_clif's build system to pass
 # --remap-path-prefix to handle this.

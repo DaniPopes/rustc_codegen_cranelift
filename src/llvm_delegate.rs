@@ -1,22 +1,9 @@
 //! Hands the whole codegen of optimized crates to rustc's built-in LLVM backend.
 //!
-//! Cranelift's optimizer is far weaker than LLVM's. A crate that is compiled with an optimizing
-//! `-Copt-level` therefore gets its code from `rustc_codegen_llvm`, and Cranelift keeps compiling
-//! the crates that are built without optimizations. Every `CodegenBackend` method is forwarded to
-//! whichever backend `init` selected, so a delegated crate is built like any other LLVM crate,
-//! including its `-Cllvm-args`, target features, LTO and linking.
-//!
-//! The decision is taken per rustc invocation, from `-Copt-level`. It can be changed with
-//! `CG_CLIF_LLVM_OPT_LEVEL`, which takes the lowest opt-level that is delegated:
-//! `off`, `1`, `2`, `3`, `s` or `z`. Ordered by optimization effort the levels are
-//! `0 < 1 < z < s < 2 < 3`. The default is `z`, so every optimizing level is delegated.
-//!
-//! JIT mode (`-Cllvm-args=jit-mode`) is never delegated.
-//!
-//! The `llvm-delegate` cargo feature links this dylib against `rustc_codegen_llvm`, which the
-//! dynamic loader resolves in `librustc_driver` when rustc loads the backend. A rustc built
-//! without the LLVM backend can't load such a dylib. Build cg_clif without the feature for it, and
-//! every crate is then compiled by Cranelift.
+//! A crate that is compiled with an optimizing `-Copt-level` gets its code from
+//! `rustc_codegen_llvm`, and Cranelift keeps compiling the rest. Every `CodegenBackend` method is
+//! forwarded to whichever backend `init` selected, so a delegated crate is built like any other
+//! LLVM crate. See `docs/usage.md` for the threshold and `CG_CLIF_LLVM_OPT_LEVEL`.
 
 use std::any::Any;
 use std::env;
@@ -36,39 +23,29 @@ use crate::{BackendConfig, CraneliftCodegenBackend};
 
 const OPT_LEVEL_ENV: &str = "CG_CLIF_LLVM_OPT_LEVEL";
 
-/// An optimization level, ordered by optimization effort.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Effort {
-    None,
-    Less,
-    SizeMin,
-    Size,
-    Default,
-    Aggressive,
-}
-
-impl Effort {
-    fn of(level: OptLevel) -> Self {
-        match level {
-            OptLevel::No => Effort::None,
-            OptLevel::Less => Effort::Less,
-            OptLevel::SizeMin => Effort::SizeMin,
-            OptLevel::Size => Effort::Size,
-            OptLevel::More => Effort::Default,
-            OptLevel::Aggressive => Effort::Aggressive,
-        }
+/// Orders optimization levels by optimization effort.
+fn effort(level: OptLevel) -> u8 {
+    match level {
+        OptLevel::No => 0,
+        OptLevel::Less => 1,
+        OptLevel::SizeMin => 2,
+        OptLevel::Size => 3,
+        OptLevel::More => 4,
+        OptLevel::Aggressive => 5,
     }
 }
 
-/// The lowest [`Effort`] that is delegated to LLVM, or `None` if nothing is.
-fn threshold() -> Result<Option<Effort>, String> {
+/// The lowest [`OptLevel`] that is delegated to LLVM, or `None` if nothing is.
+///
+/// The default is `z`, which delegates `z`, `s`, 2 and 3 but not 1.
+fn threshold() -> Result<Option<OptLevel>, String> {
     match env::var(OPT_LEVEL_ENV).as_deref() {
-        Err(env::VarError::NotPresent) | Ok("z") => Ok(Some(Effort::SizeMin)),
+        Err(env::VarError::NotPresent) | Ok("z") => Ok(Some(OptLevel::SizeMin)),
         Ok("off") => Ok(None),
-        Ok("1") => Ok(Some(Effort::Less)),
-        Ok("s") => Ok(Some(Effort::Size)),
-        Ok("2") => Ok(Some(Effort::Default)),
-        Ok("3") => Ok(Some(Effort::Aggressive)),
+        Ok("1") => Ok(Some(OptLevel::Less)),
+        Ok("s") => Ok(Some(OptLevel::Size)),
+        Ok("2") => Ok(Some(OptLevel::More)),
+        Ok("3") => Ok(Some(OptLevel::Aggressive)),
         Ok(other) => Err(format!(
             "invalid {OPT_LEVEL_ENV}=`{other}`, expected `off`, `1`, `2`, `3`, `s` or `z`"
         )),
@@ -107,6 +84,8 @@ impl LlvmDelegateBackend {
     }
 }
 
+// Forwards every method of `CodegenBackend`: one that is missing here would silently use the trait
+// default even when LLVM is active.
 impl CodegenBackend for LlvmDelegateBackend {
     fn name(&self) -> &'static str {
         self.active().name()
@@ -121,11 +100,12 @@ impl CodegenBackend for LlvmDelegateBackend {
 
         if !config.jit_mode
             && let Some(threshold) = threshold
-            && Effort::of(sess.opts.optimize) >= threshold
+            && effort(sess.opts.optimize) >= effort(threshold)
         {
-            self.llvm = new_llvm();
-            if let Some(llvm) = &mut self.llvm {
-                return llvm.init(sess);
+            if let Some(mut llvm) = new_llvm() {
+                let init = llvm.init(sess);
+                self.llvm = Some(llvm);
+                return init;
             }
         }
 

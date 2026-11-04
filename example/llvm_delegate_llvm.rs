@@ -1,6 +1,8 @@
 // Compiled at opt-level 3, so by LLVM through the delegation. Depends on `llvm_delegate_clif.rs`,
 // which is compiled by Cranelift.
 
+use std::cell::Cell;
+use std::fmt::Display;
 use std::panic::Location;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -11,7 +13,7 @@ pub const FILE: &str = file!();
 pub static LLVM_STATIC: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
-    pub static LLVM_TLS: std::cell::Cell<u32> = const { std::cell::Cell::new(20) };
+    pub static LLVM_TLS: Cell<u32> = const { Cell::new(20) };
 }
 
 struct Triangle(u64);
@@ -49,7 +51,7 @@ pub fn llvm_shape_area(shape: &dyn Shape) -> u64 {
     shape.area()
 }
 
-pub fn llvm_generic<T: std::fmt::Display>(value: T) -> String {
+pub fn llvm_generic<T: Display>(value: T) -> String {
     format!("llvm<{value}>")
 }
 

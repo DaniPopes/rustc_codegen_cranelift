@@ -146,57 +146,53 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         }
     }),
     TestCase::custom("aot.llvm_delegate", &|runner| {
-        // `llvm_delegate_clif` is built at opt-level 0 and `llvm_delegate_llvm` at opt-level 3.
-        // Crates at opt-level 2 or higher are compiled by LLVM, the rest by Cranelift.
-        let crates = [
-            ("llvm_delegate_clif", "0", None),
-            ("llvm_delegate_llvm", "3", Some("llvm_delegate_clif")),
-        ];
-        // The rest of the test suite compiles everything with Cranelift, which this test overrides.
-        let mut cranelift_crates = vec![];
-        for (name, opt_level, dep) in crates {
-            let mut cmd = runner.rustc_command([
-                &format!("example/{name}.rs"),
-                "--crate-type=rlib",
-                "--emit=link,obj",
-                "-Ccodegen-units=1",
-                &format!("-Copt-level={opt_level}"),
-                "--check-cfg=cfg(unwind)",
-            ]);
+        // Crates at opt-level 2 or higher are compiled by LLVM, the rest by Cranelift. The rest of
+        // the test suite compiles everything with Cranelift, which this test overrides.
+        let rustc = |args: &[&str]| {
+            let mut cmd = runner.rustc_command(args);
             cmd.env("CG_CLIF_LLVM_OPT_LEVEL", "2");
+            cmd.arg("--check-cfg=cfg(unwind)");
             if runner.panic_unwind_support {
                 cmd.args(["--cfg", "unwind"]);
             }
-            if let Some(dep) = dep {
-                cmd.arg("--extern").arg(dep);
-            }
             spawn_and_wait(cmd);
+        };
 
-            let obj =
-                fs::read(BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join(format!("{name}.o")))
-                    .unwrap();
-            // cg_clif names itself in the producer string.
-            cranelift_crates.push(obj.windows(14).any(|window| window == b"with cranelift"));
-        }
-        // This test also runs with `--use-backend llvm`, which compiles both crates with LLVM.
-        if cranelift_crates[0] {
-            assert!(!cranelift_crates[1], "the opt-level 3 crate was not compiled by LLVM");
-        }
+        // `llvm_delegate_clif` is built at opt-level 0 and `llvm_delegate_llvm` at opt-level 3.
+        let lib_args = ["--crate-type=rlib", "--emit=link,obj", "-Ccodegen-units=1"];
+        rustc(&[&["example/llvm_delegate_clif.rs", "-Copt-level=0"], &lib_args[..]].concat());
+        rustc(
+            &[
+                &[
+                    "example/llvm_delegate_llvm.rs",
+                    "-Copt-level=3",
+                    "--extern",
+                    "llvm_delegate_clif",
+                ],
+                &lib_args[..],
+            ]
+            .concat(),
+        );
 
-        let mut cmd = runner.rustc_command([
+        // cg_clif names itself in the producer string. This test also runs with
+        // `--use-backend llvm`, where no object contains it.
+        let obj =
+            fs::read(BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join("llvm_delegate_llvm.o"))
+                .unwrap();
+        let marker = b"with cranelift";
+        assert!(
+            !obj.windows(marker.len()).any(|window| window == marker),
+            "the opt-level 3 crate was not compiled by LLVM"
+        );
+
+        rustc(&[
             "example/llvm_delegate_main.rs",
             "-Copt-level=0",
             "--extern",
             "llvm_delegate_clif",
             "--extern",
             "llvm_delegate_llvm",
-            "--check-cfg=cfg(unwind)",
         ]);
-        cmd.env("CG_CLIF_LLVM_OPT_LEVEL", "2");
-        if runner.panic_unwind_support {
-            cmd.args(["--cfg", "unwind"]);
-        }
-        spawn_and_wait(cmd);
         runner.run_out_command("llvm_delegate_main", &[]);
     }),
     TestCase::build_bin_and_run("aot.issue-72793", "example/issue-72793.rs", &[]),
