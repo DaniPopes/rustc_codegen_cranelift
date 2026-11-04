@@ -743,16 +743,21 @@ fn test_inline_asm_narrow_inputs() {
 
     macro_rules! check {
         ($ty:ty, $val:expr) => {{
-            dirty_stack();
-            let x: $ty = black_box($val);
-            let out: u64;
-            unsafe {
-                #[cfg(target_arch = "x86_64")]
-                asm!("mov {out}, rsi", out = out(reg) out, in("rsi") x);
-                #[cfg(target_arch = "aarch64")]
-                asm!("mov {out}, x1", out = out(reg) out, in("x1") x);
+            #[inline(never)]
+            fn read_reg(x: $ty) -> u64 {
+                let out: u64;
+                unsafe {
+                    #[cfg(target_arch = "x86_64")]
+                    asm!("mov {out}, rsi", out = out(reg) out, in("rsi") x);
+                    #[cfg(target_arch = "aarch64")]
+                    asm!("mov {out}, x1", out = out(reg) out, in("x1") x);
+                }
+                out
             }
-            assert_eq!(out, x as u64);
+
+            let x: $ty = black_box($val);
+            dirty_stack();
+            assert_eq!(read_reg(x), x as u64);
         }};
     }
 
