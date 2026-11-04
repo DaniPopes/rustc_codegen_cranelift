@@ -23,3 +23,17 @@ aarch64 clif_llvm wrapped_u128_after_seven_u64
 
 # The same for a variadic argument, which is only passed in registers on Linux.
 aarch64-unknown-linux llvm_clif variadic_u128_after_six_u64
+
+# An aggregate that needs several registers must go on the stack as a whole when fewer are left,
+# but Cranelift assigns each register-sized part of it separately and splits it between the last
+# register and the stack.
+aarch64 llvm_clif double_pair_after_seven_f64
+aarch64 llvm_clif float_pair_after_seven_f64
+aarch64 llvm_clif hfa_after_six_f64
+aarch64 llvm_clif int_pair_after_seven_u64
+aarch64 llvm_clif mixed_pair_after_seven_u64
+aarch64 clif_llvm double_pair_after_seven_f64
+aarch64 clif_llvm float_pair_after_seven_f64
+aarch64 clif_llvm hfa_after_six_f64
+aarch64 clif_llvm int_pair_after_seven_u64
+aarch64 clif_llvm mixed_pair_after_seven_u64
