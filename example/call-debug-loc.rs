@@ -27,8 +27,9 @@ fn frame_location(backtrace: &str, function: &str) -> String {
 
 #[rustfmt::skip]
 fn main() {
-    // The cg_clif sysroot cannot capture backtraces on Windows yet.
-    if cfg!(windows) {
+    // Backtraces have no source locations on Windows and Apple targets, which lack DWARF
+    // symbolization of the executable.
+    if cfg!(any(windows, target_vendor = "apple")) {
         return;
     }
 
