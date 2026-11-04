@@ -52,6 +52,46 @@ macro_rules! check_abi {
             mix(&[a, b, c, d, e, f, g, h, i as u64, fold(x), j as u64, fold(y)])
         );
 
+        let (a16, wrap) = (Align16(a, b), WrapU128(x));
+        let (u8_u128, u128_f64) = (U8U128(i, y), U128F64(x, 1.5));
+        let union = U128Union { x: y };
+
+        check!(
+            $module,
+            seven_ints_wide_int(a, b, c, d, e, f, g, w, 13),
+            mix(&[a, b, c, d, e, f, g, fold(x) ^ 11, 13])
+        );
+        check!(
+            $module,
+            seven_ints_narrow_int(a, b, c, d, e, f, g, n, 13),
+            mix(&[a, b, c, d, e, f, g, 12 ^ fold(y), 13])
+        );
+        check!(
+            $module,
+            seven_ints_align16_int(a, b, c, d, e, f, g, a16, 13),
+            mix(&[a, b, c, d, e, f, g, a ^ b, 13])
+        );
+        check!(
+            $module,
+            seven_ints_wrap_int(a, b, c, d, e, f, g, wrap, 13),
+            mix(&[a, b, c, d, e, f, g, fold(x), 13])
+        );
+        check!(
+            $module,
+            seven_ints_u8_u128_int(a, b, c, d, e, f, g, u8_u128, 13),
+            mix(&[a, b, c, d, e, f, g, i as u64 ^ fold(y), 13])
+        );
+        check!(
+            $module,
+            seven_ints_u128_f64_int(a, b, c, d, e, f, g, u128_f64, 13),
+            mix(&[a, b, c, d, e, f, g, fold(x) ^ 1.5f64.to_bits(), 13])
+        );
+        check!(
+            $module,
+            seven_ints_union_int(a, b, c, d, e, f, g, union, 13),
+            mix(&[a, b, c, d, e, f, g, fold(y), 13])
+        );
+
         check!($module, ret_i128(a), ((a as u128) << 64) | (a as u128 * 3));
         let Wide(r, s) = ret_wide(a);
         assert_eq!((r, s), (ret_i128(a), a * 5), "{}::ret_wide", stringify!($module));

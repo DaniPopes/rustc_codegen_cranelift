@@ -26,6 +26,49 @@ macro_rules! define_abi {
             #[derive(Clone, Copy)]
             pub struct Narrow(pub u64, pub u128);
 
+            #[derive(Clone, Copy)]
+            #[repr(align(16))]
+            $(#[$repr])*
+            pub struct Align16(pub u64, pub u64);
+            $(#[$repr])*
+            #[derive(Clone, Copy)]
+            pub struct WrapU128(pub u128);
+            $(#[$repr])*
+            #[derive(Clone, Copy)]
+            pub struct U8U128(pub u8, pub u128);
+            $(#[$repr])*
+            #[derive(Clone, Copy)]
+            pub struct U128F64(pub u128, pub f64);
+            $(#[$repr])*
+            #[derive(Clone, Copy)]
+            pub union U128Union {
+                pub x: u128,
+                pub y: [u64; 2],
+            }
+
+            // An aggregate with the alignment of an i128 goes on the stack, after a single
+            // slot with seven integer arguments, aligned to 16 bytes.
+            macro_rules! seven_ints_struct {
+                ($name:ident, $ty:ty, $s:ident => $fold:expr) => {
+                    #[inline(never)]
+                    pub extern $abi fn $name(
+                        a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, $s: $ty, z: u64,
+                    ) -> u64 {
+                        mix(&[a, b, c, d, e, f, g, $fold, z])
+                    }
+                };
+            }
+
+            seven_ints_struct!(seven_ints_wide_int, Wide, w => fold(w.0) ^ w.1);
+            seven_ints_struct!(seven_ints_narrow_int, Narrow, n => n.0 ^ fold(n.1));
+            seven_ints_struct!(seven_ints_align16_int, Align16, s => s.0 ^ s.1);
+            seven_ints_struct!(seven_ints_wrap_int, WrapU128, s => fold(s.0));
+            seven_ints_struct!(seven_ints_u8_u128_int, U8U128, s => s.0 as u64 ^ fold(s.1));
+            seven_ints_struct!(
+                seven_ints_u128_f64_int, U128F64, s => fold(s.0) ^ s.1.to_bits()
+            );
+            seven_ints_struct!(seven_ints_union_int, U128Union, s => fold(unsafe { s.x }));
+
             // The x86_64 SysV i128 goes on the stack with r9 left free for `y`.
             #[inline(never)]
             pub extern $abi fn five_ints_i128_int(
