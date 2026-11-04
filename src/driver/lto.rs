@@ -120,27 +120,32 @@ pub(crate) fn optimize_and_codegen_fat_lto(
     each_linked_rlib_for_lto: &[PathBuf],
     modules: Vec<FatLtoInput<AotDriver>>,
 ) -> CompiledModule {
-    let mut inputs = Vec::new();
-    // Name the merged module after one of the local modules, choosing the first one by name to
-    // keep the output deterministic.
-    let mut name = None::<String>;
-    for module in modules {
-        let (module_name, buffer) = match module {
+    if sess.target.is_like_msvc {
+        dcx.fatal("fat LTO is not supported by rustc_codegen_cranelift on MSVC targets");
+    }
+
+    let mut modules = modules
+        .into_iter()
+        .map(|module| match module {
             FatLtoInput::InMemory(module) => {
                 (module.name, AotDriver::serialize_module(module.module_llvm, false))
             }
             FatLtoInput::Serialized { name, bitcode_path } => {
                 (name, read_serialized(dcx, &bitcode_path))
             }
-        };
+        })
+        .collect::<Vec<_>>();
+    // Modules arrive in the order their codegen finished. Sort them to keep the output
+    // deterministic, and name the merged module after the first one.
+    modules.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let name = modules[0].0.clone();
+
+    let mut inputs = Vec::new();
+    for (module_name, buffer) in modules {
         let module = write_module(cgcx, dcx, &module_name, "lto.", &buffer);
         inputs.extend(module.object);
         inputs.extend(module.global_asm_object);
-        if name.as_ref().is_none_or(|name| module_name < *name) {
-            name = Some(module_name);
-        }
     }
-    let name = name.unwrap();
 
     for_each_upstream_object(cgcx, dcx, each_linked_rlib_for_lto, |name, buffer| {
         let module = write_module(cgcx, dcx, name, "lto.", &buffer);
@@ -283,7 +288,16 @@ fn link_relocatable(
     }
     write_file(dcx, &list_path, list.as_bytes());
 
-    let linker = crate::toolchain::get_toolchain_binary(sess, "ld");
+    // The name derived from the linker may not exist, for example for a versioned `clang-22`.
+    let Some((linker, version)) = [crate::toolchain::get_toolchain_binary(sess, "ld"), "ld".into()]
+        .into_iter()
+        .find_map(|linker| {
+            let version = Command::new(&linker).arg("--version").output().ok()?.stdout;
+            Some((linker, version))
+        })
+    else {
+        dcx.fatal("failed to find `ld` to merge object files for LTO");
+    };
     let mut cmd = Command::new(&linker);
     cmd.arg("-r").arg("-o").arg(output);
     if sess.target.is_like_darwin {
@@ -292,7 +306,7 @@ fn link_relocatable(
         // Cranelift gives all function sections the same name, which would otherwise be merged
         // into a single section, preventing `--gc-sections` from removing unused functions. Only
         // GNU ld can keep them apart.
-        if is_gnu_ld(&linker) {
+        if version.starts_with(b"GNU ld") {
             cmd.arg("--unique=.text.subsection");
         }
         cmd.arg(format!("@{}", list_path.display()));
@@ -310,11 +324,4 @@ fn link_relocatable(
         )),
         Err(err) => dcx.fatal(format!("failed to run `{}`: {err}", linker.display())),
     }
-}
-
-fn is_gnu_ld(linker: &Path) -> bool {
-    Command::new(linker)
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.stdout.starts_with(b"GNU ld"))
 }
