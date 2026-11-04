@@ -7,6 +7,7 @@ use cranelift_module::DataId;
 use cranelift_object::ObjectProduct;
 use gimli::write::{Address, CieId, EhFrame, FrameTable, Section};
 use gimli::{Encoding, Format, RunTimeEndian};
+use target_lexicon::BinaryFormat;
 
 use super::emit::{DebugRelocName, address_for_data, address_for_func};
 use super::gcc_except_table::{
@@ -33,10 +34,13 @@ impl UnwindContext {
         let mut frame_table = FrameTable::default();
 
         let cie_id = if let Some(mut cie) = module.isa().create_systemv_cie() {
-            let ptr_encoding = if pic_eh_frame {
-                gimli::DwEhPe(gimli::DW_EH_PE_pcrel.0 | gimli::DW_EH_PE_sdata4.0)
-            } else {
+            let ptr_encoding = if !pic_eh_frame {
                 gimli::DW_EH_PE_absptr
+            } else if module.isa().triple().binary_format == BinaryFormat::Macho {
+                // Pointer sized pc-relative, like LLVM. Some linkers only accept this encoding.
+                gimli::DW_EH_PE_pcrel
+            } else {
+                gimli::DwEhPe(gimli::DW_EH_PE_pcrel.0 | gimli::DW_EH_PE_sdata4.0)
             };
 
             cie.fde_address_encoding = ptr_encoding;
@@ -65,7 +69,20 @@ impl UnwindContext {
                     gimli::DwEhPe(gimli::DW_EH_PE_indirect.0 | gimli::DW_EH_PE_absptr.0)
                 };
 
-                cie.lsda_encoding = Some(ptr_encoding);
+                // LLVM uses a pointer sized LSDA pointer on aarch64 ELF.
+                cie.lsda_encoding = Some(
+                    if pic_eh_frame
+                        && matches!(
+                            module.isa().triple().architecture,
+                            target_lexicon::Architecture::Aarch64(_)
+                        )
+                        && module.isa().triple().binary_format == BinaryFormat::Elf
+                    {
+                        gimli::DwEhPe(gimli::DW_EH_PE_pcrel.0 | gimli::DW_EH_PE_sdata8.0)
+                    } else {
+                        ptr_encoding
+                    },
+                );
 
                 // FIXME use eh_personality lang item instead
                 let personality = module
@@ -86,24 +103,41 @@ impl UnwindContext {
                     )
                     .unwrap();
 
-                // Use indirection here to support PIC the case where rust_eh_personality is defined in
-                // another DSO.
-                let personality_ref = module
-                    .declare_data(&format!("DW.ref.{eh_personality}"), Linkage::Local, false, false)
-                    .unwrap();
+                if pic_eh_frame && module.isa().triple().binary_format == BinaryFormat::Macho {
+                    // ld64 rejects a CIE personality that points at a local `DW.ref` slot. Like
+                    // LLVM, reference the personality through the GOT instead
+                    // (ARM64_RELOC_POINTER_TO_GOT), which the linker creates.
+                    let encoding = gimli::DwEhPe(
+                        gimli::DW_EH_PE_indirect.0
+                            | gimli::DW_EH_PE_pcrel.0
+                            | gimli::DW_EH_PE_sdata4.0,
+                    );
+                    cie.personality = Some((encoding, address_for_func(personality)));
+                } else {
+                    // Use indirection here to support PIC the case where rust_eh_personality is defined in
+                    // another DSO.
+                    let personality_ref = module
+                        .declare_data(
+                            &format!("DW.ref.{eh_personality}"),
+                            Linkage::Local,
+                            false,
+                            false,
+                        )
+                        .unwrap();
 
-                let mut personality_ref_data = DataDescription::new();
-                // Note: Must not use define_zeroinit. The unwinder can't handle this being in the .bss
-                // section.
-                let pointer_bytes = usize::from(module.target_config().pointer_bytes());
-                personality_ref_data.define(vec![0; pointer_bytes].into_boxed_slice());
-                let personality_func_ref =
-                    module.declare_func_in_data(personality, &mut personality_ref_data);
-                personality_ref_data.write_function_addr(0, personality_func_ref);
+                    let mut personality_ref_data = DataDescription::new();
+                    // Note: Must not use define_zeroinit. The unwinder can't handle this being in the .bss
+                    // section.
+                    let pointer_bytes = usize::from(module.target_config().pointer_bytes());
+                    personality_ref_data.define(vec![0; pointer_bytes].into_boxed_slice());
+                    let personality_func_ref =
+                        module.declare_func_in_data(personality, &mut personality_ref_data);
+                    personality_ref_data.write_function_addr(0, personality_func_ref);
 
-                module.define_data(personality_ref, &personality_ref_data).unwrap();
+                    module.define_data(personality_ref, &personality_ref_data).unwrap();
 
-                cie.personality = Some((code_ptr_encoding, address_for_data(personality_ref)));
+                    cie.personality = Some((code_ptr_encoding, address_for_data(personality_ref)));
+                }
             }
 
             Some(frame_table.add_cie(cie))
@@ -197,7 +231,12 @@ impl UnwindContext {
 
                     let mut data = DataDescription::new();
                     data.define(gcc_except_table.writer.into_vec().into_boxed_slice());
-                    data.set_custom_section(".gcc_except_table");
+                    // cranelift-object creates a Mach-O section per custom section data object and
+                    // Mach-O objects hold at most 255 sections, so keep the relocation-free LSDA
+                    // in the shared read-only data section there.
+                    if module.isa().triple().binary_format != BinaryFormat::Macho {
+                        data.set_custom_section(".gcc_except_table");
+                    }
 
                     for reloc in &gcc_except_table.relocs {
                         match reloc.name {

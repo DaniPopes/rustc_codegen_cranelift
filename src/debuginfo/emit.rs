@@ -188,16 +188,24 @@ impl Writer for WriterRelocate {
             Address::Symbol { symbol, addend } => match eh_pe.application() {
                 gimli::DW_EH_PE_pcrel => {
                     let size = match eh_pe.format() {
+                        gimli::DW_EH_PE_absptr => size,
                         gimli::DW_EH_PE_sdata4 => 4,
                         gimli::DW_EH_PE_sdata8 => 8,
                         _ => return Err(gimli::write::Error::UnsupportedPointerEncoding(eh_pe)),
+                    };
+                    // An indirect pointer to a function symbol needs a GOT entry created by the
+                    // linker. Indirect pointers to data symbols target a local slot instead.
+                    let kind = if eh_pe.is_indirect() && symbol & 1 << 31 == 0 {
+                        object::RelocationKind::GotRelative
+                    } else {
+                        object::RelocationKind::Relative
                     };
                     self.relocs.push(DebugReloc {
                         offset: self.len() as u32,
                         size,
                         name: DebugRelocName::Symbol(symbol),
                         addend,
-                        kind: object::RelocationKind::Relative,
+                        kind,
                     });
                     self.write_udata(0, size)
                 }
