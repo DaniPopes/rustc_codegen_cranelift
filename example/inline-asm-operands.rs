@@ -2,12 +2,18 @@
 
 #![cfg_attr(target_arch = "aarch64", feature(f16, f128))]
 
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 use std::arch::asm;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 use std::hint::black_box;
 #[cfg(target_arch = "x86_64")]
-use std::mem::{MaybeUninit, transmute};
+use std::mem::MaybeUninit;
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+use std::mem::transmute;
 
 fn main() {
     #[cfg(target_arch = "x86_64")]
@@ -273,9 +279,6 @@ unsafe fn kreg_operands_bw() {
 
 #[cfg(target_arch = "aarch64")]
 unsafe fn vreg_operands() {
-    use std::arch::aarch64::*;
-    use std::mem::transmute;
-
     unsafe {
         let out: u8;
         asm!("mov {o:v}.16b, {i:v}.16b", i = in(vreg) 0x5au8, o = out(vreg) out);
