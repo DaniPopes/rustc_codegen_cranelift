@@ -123,6 +123,12 @@ fn main() {
         }
     }
 
+    // Compile the sysroot and the tests with Cranelift even when they are built with optimizations.
+    if env::var_os("CG_CLIF_LLVM_OPT_LEVEL").is_none() {
+        // Single threaded at this point.
+        env::set_var("CG_CLIF_LLVM_OPT_LEVEL", "off");
+    }
+
     let current_dir = std::env::current_dir().unwrap();
     out_dir = current_dir.join(out_dir);
 

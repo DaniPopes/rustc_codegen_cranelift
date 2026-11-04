@@ -14,6 +14,16 @@ $ $cg_clif_dir/dist/cargo-clif build
 
 This will build your project with rustc_codegen_cranelift instead of the usual LLVM backend.
 
+## Optimized crates are compiled by LLVM
+
+Cranelift's optimizer is far weaker than LLVM's. When a crate is compiled with an optimizing `-Copt-level` (such as a `[profile.dev.package.hot] opt-level = 3` entry), rustc_codegen_cranelift hands the whole crate to rustc's built-in LLVM backend, and compiles the crates at `opt-level` 0 and 1 itself. No configuration is needed. Delegated crates are built exactly like with rustc without `-Zcodegen-backend`: LLVM does the codegen, honors `-Cllvm-args`, `-Ctarget-cpu` and `-Clto`, and its object files link with the ones from Cranelift.
+
+Set `CG_CLIF_LLVM_OPT_LEVEL` to the lowest `opt-level` that is delegated: `off`, `1`, `2`, `3`, `s` or `z`. Ordered by optimization effort the levels are `0 < 1 < z < s < 2 < 3`. The default is `z`, so every optimizing level is delegated. `off` compiles everything with Cranelift, which `./y.sh build` and `./y.sh test` use unless the variable is set.
+
+`-Cllvm-args` options starting with `-` belong to LLVM. Cranelift ignores them. Other options are rustc_codegen_cranelift options, like `jit-mode`, and an unknown one is an error. JIT mode is never delegated.
+
+Delegation needs a rustc that contains the LLVM backend. A dylib built with the default `llvm-delegate` cargo feature links against `rustc_codegen_llvm`, and rustc fails to load it with an `undefined symbol` error if rustc does not have it. Build with `--no-default-features` for such a rustc.
+
 ## Rustc
 
 > You should prefer using the Cargo method.
