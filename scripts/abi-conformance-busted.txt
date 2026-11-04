@@ -28,3 +28,16 @@ x86_64 llvm_clif wrapped_f128_after_nine_f64
 x86_64 clif_llvm align16_after_seven_u64
 x86_64 clif_llvm wrapped_u128_after_seven_u64
 x86_64 clif_llvm wrapped_f128_after_nine_f64
+
+# An aggregate or integer that takes two registers does not fit when only one integer register is
+# left. It goes on the stack, and the next integer argument must go on the stack too, but Cranelift
+# puts it in the register that is left.
+aarch64 llvm_clif u128_after_seven_u64
+aarch64 llvm_clif align16_after_seven_u64
+aarch64 llvm_clif wrapped_u128_after_seven_u64
+aarch64 clif_llvm u128_after_seven_u64
+aarch64 clif_llvm align16_after_seven_u64
+aarch64 clif_llvm wrapped_u128_after_seven_u64
+
+# The same for a variadic argument, which is only passed in registers on Linux.
+aarch64-unknown-linux llvm_clif variadic_u128_after_six_u64

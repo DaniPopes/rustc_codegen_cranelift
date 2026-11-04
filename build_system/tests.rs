@@ -147,8 +147,12 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         }
     }),
     TestCase::custom("aot.abi_conformance", &|runner| {
-        if runner.target_compiler.target.contains("windows") {
-            eprintln!("Skipping `abi_conformance` test: the cases assume a non-Windows ABI");
+        let target = &runner.target_compiler.target;
+        // The cases assume a 64-bit x86_64 or aarch64 ABI that is not the Windows one.
+        if !(target.starts_with("x86_64") || target.starts_with("aarch64"))
+            || target.contains("windows")
+        {
+            eprintln!("Skipping `abi_conformance` test: unsupported target");
             return;
         }
 
@@ -183,10 +187,13 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
                 spawn_and_wait(cmd);
             };
 
-            rustc(callee, &["--cfg", "callee", "--crate-type", "rlib", "--crate-name", "abi_callee"]);
+            rustc(
+                callee,
+                &["--cfg", "callee", "--crate-type", "rlib", "--crate-name", "abi_callee"],
+            );
             rustc(caller, &["--cfg", "caller", "--crate-name", "abi_caller"]);
 
-            if runner.is_native {
+            {
                 let mut cmd = runner.target_compiler.run_with_runner(out_dir.join("abi_caller"));
                 let output = cmd.output().unwrap();
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -205,15 +212,16 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
                 );
                 let unexpected: Vec<_> = mismatches.difference(&busted).collect();
                 let fixed: Vec<_> = busted.difference(&mismatches).collect();
-                if !unexpected.is_empty() || !fixed.is_empty() || (!output.status.success() && mismatches.is_empty()) {
+                if !unexpected.is_empty()
+                    || !fixed.is_empty()
+                    || (!output.status.success() && mismatches.is_empty())
+                {
                     eprintln!(
                         "abi-conformance: unexpected mismatches: {unexpected:?}, \
                          cases in scripts/abi-conformance-busted.txt that now pass: {fixed:?}"
                     );
                     failed = true;
                 }
-            } else {
-                eprintln!("Cross-Compiling: Not running tests");
             }
         }
         if failed {
@@ -615,7 +623,8 @@ fn busted_abi_conformance_cases(dirs: &Dirs, target: &str, backends: &str) -> BT
         .filter(|line| !line.starts_with('#') && !line.is_empty())
         .filter_map(|line| {
             let mut parts = line.split_whitespace();
-            let (target_prefix, line_backends, case) = (parts.next()?, parts.next()?, parts.next()?);
+            let (target_prefix, line_backends, case) =
+                (parts.next()?, parts.next()?, parts.next()?);
             (target.starts_with(target_prefix) && line_backends == backends)
                 .then(|| case.to_owned())
         })

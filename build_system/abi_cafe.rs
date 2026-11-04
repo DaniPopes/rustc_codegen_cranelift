@@ -1,11 +1,10 @@
 use std::path::Path;
 
-use crate::abi_cafe_gen;
 use crate::build_sysroot::SysrootConfig;
 use crate::path::Dirs;
 use crate::prepare::GitRepo;
 use crate::utils::{CargoProject, Compiler};
-use crate::{CodegenBackend, build_sysroot};
+use crate::{CodegenBackend, abi_cafe_gen, build_sysroot};
 
 /// How many tests to run in one abi-cafe invocation.
 const TESTS_PER_RUN: usize = 16;
