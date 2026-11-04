@@ -174,8 +174,8 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
                 // Cranelift can't define variadic functions.
                 if callee == "llvm" {
                     cmd.args(["--cfg", "variadic"]);
-                    // Cranelift can't call variadic functions with float arguments.
-                    if caller == "llvm" {
+                    // Cranelift can't call variadic functions with float arguments on x86_64.
+                    if caller == "llvm" || runner.target_compiler.target.starts_with("aarch64") {
                         cmd.args(["--cfg", "variadic_float"]);
                     }
                 }
