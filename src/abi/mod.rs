@@ -15,13 +15,14 @@ use cranelift_module::ModuleError;
 use rustc_abi::{CanonAbi, ExternAbi, X86Call};
 use rustc_codegen_ssa::base::is_call_from_compiler_builtins_to_upstream_monomorphization;
 use rustc_codegen_ssa::diagnostics::CompilerBuiltinsCannotCall;
+use rustc_lint_defs::builtin::TAIL_CALL_TRACK_CALLER;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::ty::layout::{FnAbiOf, HasTypingEnv as _};
 use rustc_middle::ty::print::with_no_trimmed_paths;
 use rustc_middle::ty::{ShimKind, TypeVisitableExt};
 use rustc_session::Session;
 use rustc_span::Spanned;
-use rustc_target::callconv::{FnAbi, PassMode};
+use rustc_target::callconv::{FnAbi, IndirectMode, PassMode};
 use rustc_target::spec::Arch;
 use smallvec::{SmallVec, smallvec};
 
@@ -43,9 +44,10 @@ fn clif_sig_from_fn_abi<'tcx>(
 ) -> Signature {
     let call_conv = conv_to_call_conv(tcx.sess, fn_abi.conv, default_call_conv);
 
-    let inputs = fn_abi.args.iter().flat_map(|arg_abi| arg_abi.get_abi_param(tcx).into_iter());
+    let inputs =
+        fn_abi.args.iter().flat_map(|arg_abi| arg_abi.get_abi_param(tcx, fn_abi.conv).into_iter());
 
-    let (return_ptr, returns) = fn_abi.ret.get_abi_return(tcx);
+    let (return_ptr, returns) = fn_abi.ret.get_abi_return(tcx, fn_abi.conv);
     // Sometimes the first param is a pointer to the place where the return value needs to be stored.
     let params: Vec<_> = return_ptr.into_iter().chain(inputs).collect();
 
@@ -60,9 +62,11 @@ pub(crate) fn conv_to_call_conv(
     match c {
         CanonAbi::Rust | CanonAbi::RustCold | CanonAbi::C => default_call_conv,
 
-        CanonAbi::RustPreserveNone | CanonAbi::RustTail => {
-            sess.dcx().fatal(format!("call conv {c:?} is LLVM-specific"))
-        }
+        // FIXME use a dedicated Cranelift calling convention matching LLVM's `preserve_none`.
+        CanonAbi::RustPreserveNone => CallConv::Tail,
+
+        // FIXME use a calling convention matching LLVM's `tailcc` for interop with LLVM codegen.
+        CanonAbi::RustTail => CallConv::Tail,
 
         // Functions with this calling convention can only be called from assembly, but it is
         // possible to declare an `extern "custom"` block, so the backend still needs a calling
@@ -83,6 +87,12 @@ pub(crate) fn conv_to_call_conv(
             unreachable!("tried to use {c:?} call conv which only exists on an unsupported target")
         }
     }
+}
+
+/// Whether functions with this ABI use Cranelift's `tail` calling convention, which is required
+/// by `return_call` and `return_call_indirect`.
+fn is_tail_conv(c: CanonAbi) -> bool {
+    matches!(c, CanonAbi::RustPreserveNone | CanonAbi::RustTail)
 }
 
 pub(crate) fn get_function_sig<'tcx>(
@@ -309,16 +319,28 @@ pub(crate) fn codegen_fn_prelude<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, start_
                 let mut params = Vec::new();
                 for (i, _arg_ty) in tupled_arg_tys.iter().enumerate() {
                     let arg_abi = arg_abis_iter.next().unwrap();
-                    let param =
-                        cvalue_for_param(fx, Some(local), Some(i), arg_abi, &mut block_params_iter);
+                    let param = cvalue_for_param(
+                        fx,
+                        Some(local),
+                        Some(i),
+                        arg_abi,
+                        fx.fn_abi.conv,
+                        &mut block_params_iter,
+                    );
                     params.push(param);
                 }
 
                 (local, ArgKind::Spread(params), arg_ty)
             } else {
                 let arg_abi = arg_abis_iter.next().unwrap();
-                let param =
-                    cvalue_for_param(fx, Some(local), None, arg_abi, &mut block_params_iter);
+                let param = cvalue_for_param(
+                    fx,
+                    Some(local),
+                    None,
+                    arg_abi,
+                    fx.fn_abi.conv,
+                    &mut block_params_iter,
+                );
                 (local, ArgKind::Normal(param), arg_ty)
             }
         })
@@ -328,7 +350,9 @@ pub(crate) fn codegen_fn_prelude<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, start_
     if fx.instance.def.requires_caller_location(fx.tcx) {
         // Store caller location for `#[track_caller]`.
         let arg_abi = arg_abis_iter.next().unwrap();
-        let param = cvalue_for_param(fx, None, None, arg_abi, &mut block_params_iter).unwrap();
+        let param =
+            cvalue_for_param(fx, None, None, arg_abi, fx.fn_abi.conv, &mut block_params_iter)
+                .unwrap();
         assert!(
             !param.is_underaligned_pointee,
             "caller location argument should not be underaligned",
@@ -423,6 +447,13 @@ fn codegen_call_argument_operand<'tcx>(
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub(crate) enum CallKind {
+    Normal,
+    /// `become`: the callee returns directly to the caller's caller.
+    Tail,
+}
+
 pub(crate) fn codegen_terminator_call<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     source_info: mir::SourceInfo,
@@ -431,6 +462,7 @@ pub(crate) fn codegen_terminator_call<'tcx>(
     destination: Place<'tcx>,
     target: Option<BasicBlock>,
     unwind: UnwindAction,
+    kind: CallKind,
 ) {
     let func = codegen_operand(fx, func);
     let fn_sig = func.layout().ty.fn_sig(fx.tcx);
@@ -491,10 +523,42 @@ pub(crate) fn codegen_terminator_call<'tcx>(
             // it is `func returning noop future`
             InstanceKind::Shim(ShimKind::DropGlue(_, None)) => {
                 // empty drop glue - a nop.
+                if kind == CallKind::Tail {
+                    codegen_return(fx);
+                    return;
+                }
                 let dest = target.expect("Non terminating drop_in_place_real???");
                 let ret_block = fx.get_block(dest);
                 fx.bcx.ins().jump(ret_block, &[]);
                 return;
+            }
+            // The callee of a tail call must match the caller's ABI, which never includes a caller
+            // location. Call the shim for function pointers instead, like `rustc_codegen_ssa`.
+            _ if kind == CallKind::Tail && instance.def.requires_caller_location(fx.tcx) => {
+                if let Some(hir_id) = source_info.scope.lint_root(&fx.mir.source_scopes) {
+                    fx.tcx.emit_node_lint(
+                        TAIL_CALL_TRACK_CALLER,
+                        hir_id,
+                        rustc_errors::DiagDecorator(|d| {
+                            _ = d
+                                .primary_message(
+                                    "tail calling a function marked with `#[track_caller]` \
+                                     has no special effect",
+                                )
+                                .span(source_info.span)
+                        }),
+                    );
+                }
+
+                Some(
+                    ty::Instance::resolve_for_fn_ptr(
+                        fx.tcx,
+                        fx.typing_env(),
+                        def_id,
+                        fn_args.no_bound_vars().unwrap(),
+                    )
+                    .unwrap(),
+                )
             }
             _ => Some(instance),
         }
@@ -606,6 +670,14 @@ pub(crate) fn codegen_terminator_call<'tcx>(
         }
     };
 
+    // FIXME(explicit_tail_calls): `become` with a calling convention other than `tail` is lowered
+    // to a regular call followed by a return, so it doesn't guarantee that the stack doesn't grow.
+    // Guaranteeing it requires Cranelift to support sibling calls for caller-pops conventions.
+    if kind == CallKind::Tail && is_tail_conv(fn_abi.conv) {
+        codegen_tail_call(fx, fn_abi, func_ref, first_arg_override, args);
+        return;
+    }
+
     self::returning::codegen_with_call_return_arg(fx, &fn_abi.ret, ret_place, |fx, return_ptr| {
         let mut call_args = return_ptr
             .into_iter()
@@ -615,7 +687,14 @@ pub(crate) fn codegen_terminator_call<'tcx>(
                     .enumerate()
                     .skip(if first_arg_override.is_some() { 1 } else { 0 })
                     .flat_map(|(i, arg)| {
-                        adjust_arg_for_abi(fx, arg.value, &fn_abi.args[i], arg.is_owned).into_iter()
+                        adjust_arg_for_abi(
+                            fx,
+                            arg.value,
+                            &fn_abi.args[i],
+                            fn_abi.conv,
+                            arg.is_owned,
+                        )
+                        .into_iter()
                     }),
             )
             .collect::<Vec<Value>>();
@@ -636,6 +715,8 @@ pub(crate) fn codegen_terminator_call<'tcx>(
     if let Some(dest) = target {
         let ret_block = fx.get_block(dest);
         fx.bcx.ins().jump(ret_block, &[]);
+    } else if kind == CallKind::Tail {
+        codegen_return(fx);
     } else {
         fx.bcx.ins().trap(TrapCode::user(1 /* unreachable */).unwrap());
     }
@@ -668,14 +749,14 @@ pub(crate) fn codegen_terminator_call<'tcx>(
         abi_params.extend(
             fn_abi.args[..fn_abi.fixed_count as usize]
                 .iter()
-                .flat_map(|arg_abi| arg_abi.get_abi_param(fx.tcx).into_iter()),
+                .flat_map(|arg_abi| arg_abi.get_abi_param(fx.tcx, fn_abi.conv).into_iter()),
         );
         let fixed_arg_count = abi_params.len();
         // Add the variadic arguments.
         abi_params.extend(
             fn_abi.args[fn_abi.fixed_count as usize..]
                 .iter()
-                .flat_map(|arg_abi| arg_abi.get_abi_param(fx.tcx).into_iter()),
+                .flat_map(|arg_abi| arg_abi.get_abi_param(fx.tcx, fn_abi.conv).into_iter()),
         );
 
         if fx.tcx.sess.target.is_like_darwin && fx.tcx.sess.target.arch == Arch::AArch64 {
@@ -732,6 +813,87 @@ pub(crate) fn codegen_terminator_call<'tcx>(
 
         // Put the `AbiParam`s back in the signature.
         fx.bcx.func.dfg.signatures[sig_ref].params = abi_params;
+    }
+}
+
+/// Lower `become` of a function using Cranelift's `tail` calling convention to `return_call` or
+/// `return_call_indirect`.
+///
+/// The caller and the callee have the same ABI, except when both use `extern "tail"`. Following
+/// `rustc_codegen_ssa`, a return value passed indirectly is written to the caller's own return
+/// place and arguments passed by pointer reuse the pointers the caller received, as the caller's
+/// stack frame is gone when the callee runs.
+fn codegen_tail_call<'tcx>(
+    fx: &mut FunctionCx<'_, '_, 'tcx>,
+    fn_abi: &FnAbi<'tcx, Ty<'tcx>>,
+    func_ref: CallTarget,
+    first_arg_override: Option<Value>,
+    args: Vec<CallArgument<'tcx>>,
+) {
+    // The caller's parameters: the return pointer if any, followed by the arguments.
+    let entry_block = fx.bcx.func.layout.entry_block().unwrap();
+    let caller_params = fx.bcx.func.dfg.block_params(entry_block).to_vec();
+    let mut caller_param_idx = 0;
+
+    let mut call_args = vec![];
+    if fn_abi.ret.is_indirect() {
+        assert!(fx.fn_abi.ret.is_indirect(), "tail call changes the return pass mode");
+        call_args.push(caller_params[0]);
+        caller_param_idx += 1;
+    }
+    call_args.extend(first_arg_override);
+
+    // Read every argument before overwriting any of the caller's incoming argument memory, as the
+    // arguments may be read from it.
+    let mut indirect_args = vec![];
+    for (i, arg) in args.into_iter().enumerate() {
+        let arg_abi = &fn_abi.args[i];
+        let caller_arg_abi = fx.fn_abi.args.get(i);
+        let incoming_param_idx = caller_param_idx;
+        caller_param_idx +=
+            caller_arg_abi.map_or(0, |abi| abi.get_abi_param(fx.tcx, fx.fn_abi.conv).len());
+
+        if i == 0 && first_arg_override.is_some() {
+            // Already passed, it is the data pointer of the trait object.
+            continue;
+        }
+
+        if matches!(arg_abi.mode, PassMode::Indirect { mode: IndirectMode::Pointer, .. }) {
+            if caller_arg_abi.is_none_or(|caller_arg_abi| caller_arg_abi.mode != arg_abi.mode) {
+                fx.tcx.dcx().fatal(
+                    "tail calls passing arguments by pointer require the same argument \
+                     pass mode in the caller and the callee",
+                );
+            }
+            let incoming_ptr = caller_params[incoming_param_idx];
+
+            let tmp = CPlace::new_stack_slot(fx, arg_abi.layout);
+            tmp.write_cvalue(fx, arg.value);
+            indirect_args.push((incoming_ptr, tmp));
+            call_args.push(incoming_ptr);
+        } else {
+            call_args.extend(adjust_arg_for_abi(fx, arg.value, arg_abi, fn_abi.conv, arg.is_owned));
+        }
+    }
+
+    for (incoming_ptr, tmp) in indirect_args {
+        let place = CPlace::for_ptr(Pointer::new(incoming_ptr), tmp.layout());
+        let tmp = tmp.to_cvalue(fx);
+        place.write_cvalue(fx, tmp);
+    }
+
+    if fx.clif_comments.enabled() {
+        let nop_inst = fx.bcx.ins().nop();
+        with_no_trimmed_paths!(fx.add_post_comment(nop_inst, format!("abi: {:?}", fn_abi)));
+    }
+
+    match func_ref {
+        CallTarget::Direct(func_ref) => {
+            fx.bcx.ins().return_call(func_ref, &call_args);
+        }
+        CallTarget::Indirect(sig, func_ptr) => {
+            fx.bcx.ins().return_call_indirect(sig, func_ptr, &call_args);
+        }
     }
 }
 
@@ -805,7 +967,8 @@ pub(crate) fn codegen_drop<'tcx>(
                     fx,
                     fx.layout_of(Ty::new_mut_ref(fx.tcx, fx.tcx.lifetimes.re_erased, ty)),
                 );
-                let arg_value = adjust_arg_for_abi(fx, arg_value, &fn_abi.args[0], true);
+                let arg_value =
+                    adjust_arg_for_abi(fx, arg_value, &fn_abi.args[0], fn_abi.conv, true);
 
                 let mut call_args: Vec<Value> = arg_value.into_iter().collect::<Vec<_>>();
 
@@ -816,6 +979,7 @@ pub(crate) fn codegen_drop<'tcx>(
                         fx,
                         caller_location,
                         &fn_abi.args[1],
+                        fn_abi.conv,
                         false,
                     ));
                 }
