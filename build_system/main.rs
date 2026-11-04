@@ -52,7 +52,7 @@ enum CodegenBackend {
 /// Mirrors `unwinding_enabled` in `src/debuginfo/unwind.rs`.
 fn supports_panic_unwind(target: &str) -> bool {
     (target.starts_with("x86_64-") || target.starts_with("aarch64-"))
-        && !["windows", "apple", "uefi"].iter().any(|os| target.contains(os))
+        && !["windows", "cygwin", "apple", "uefi"].iter().any(|os| target.contains(os))
 }
 
 fn main() {
@@ -180,6 +180,9 @@ fn main() {
     let target_tuple =
         std::env::var("TARGET_TUPLE").unwrap_or_else(|_| bootstrap_host_compiler.target.clone());
 
+    if panic_unwind_support == Some(true) && !supports_panic_unwind(&target_tuple) {
+        arg_error!("--panic-unwind-support is not supported for target {}", target_tuple);
+    }
     sysroot_config.panic_unwind_support =
         panic_unwind_support.unwrap_or_else(|| supports_panic_unwind(&target_tuple));
 

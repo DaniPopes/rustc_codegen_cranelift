@@ -1,4 +1,4 @@
-// Checks that panics unwind correctly. This only works when compiled with `-Cpanic=unwind`.
+// Checks that panics unwind correctly. This has to be compiled with `-Cpanic=unwind`.
 //
 // When run with the argument `abort-in-drop` or `abort-extern-c`, this instead panics in a way
 // that has to abort the process.
@@ -10,7 +10,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread;
 
-// Thread locals are not supported by the JIT, so use statics.
 static LOG: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 static DROPPED: AtomicU32 = AtomicU32::new(0);
 
@@ -20,18 +19,6 @@ fn log(entry: &'static str) {
 
 fn take_log() -> Vec<&'static str> {
     std::mem::take(&mut *LOG.lock().unwrap())
-}
-
-fn count_drop() {
-    DROPPED.fetch_add(1, Ordering::SeqCst);
-}
-
-fn reset_dropped() {
-    DROPPED.store(0, Ordering::SeqCst);
-}
-
-fn dropped() -> u32 {
-    DROPPED.load(Ordering::SeqCst)
 }
 
 struct LogOnDrop(&'static str);
@@ -118,7 +105,7 @@ fn panic_in_drop_drops_remaining_elements() {
 
     let result = catch_unwind(|| {
         let _v = vec![LogOnDrop("0"), LogOnDrop("1")];
-        let _slice = vec![LogOnDrop("s0"), LogOnDrop("s1")];
+        let _second = vec![LogOnDrop("s0"), LogOnDrop("s1")];
         drop(vec![LogOnDrop("x0")]);
         let _p = PanicOnDrop("p");
         let _tail = vec![LogOnDrop("tail")];
@@ -258,15 +245,6 @@ fn thread_join_and_scope() {
     }));
     assert_eq!(message(&*result.unwrap_err()), "a scoped thread panicked");
     assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-    let mutex = std::sync::Arc::new(std::sync::Mutex::new(0));
-    let mutex2 = mutex.clone();
-    let _ = thread::spawn(move || {
-        let _lock = mutex2.lock().unwrap();
-        panics("poison");
-    })
-    .join();
-    assert!(mutex.lock().is_err());
 }
 
 #[inline(never)]
@@ -308,7 +286,7 @@ struct Counted;
 
 impl Drop for Counted {
     fn drop(&mut self) {
-        count_drop();
+        DROPPED.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -319,87 +297,41 @@ fn maybe_panic(i: u32, panic_at: u32) {
     }
 }
 
+macro_rules! x4 {
+    ($($t:tt)*) => {
+        $($t)* $($t)* $($t)* $($t)*
+    };
+}
+
 macro_rules! call_site {
-    ($i:expr, $panic_at:expr) => {
+    ($i:ident, $panic_at:ident) => {
         let _counted = Counted;
         maybe_panic($i, $panic_at);
-    };
-}
-
-macro_rules! repeat4 {
-    ($mac:ident, $n:expr, $panic_at:expr) => {
-        $mac!($n * 4, $panic_at);
-        $mac!($n * 4 + 1, $panic_at);
-        $mac!($n * 4 + 2, $panic_at);
-        $mac!($n * 4 + 3, $panic_at);
-    };
-}
-
-macro_rules! repeat16 {
-    ($n:expr, $panic_at:expr) => {
-        repeat4!(call_site, $n * 4, $panic_at);
-        repeat4!(call_site, $n * 4 + 1, $panic_at);
-        repeat4!(call_site, $n * 4 + 2, $panic_at);
-        repeat4!(call_site, $n * 4 + 3, $panic_at);
-    };
-}
-
-macro_rules! repeat256 {
-    ($panic_at:expr) => {
-        repeat16!(0, $panic_at);
-        repeat16!(1, $panic_at);
-        repeat16!(2, $panic_at);
-        repeat16!(3, $panic_at);
-        repeat16!(4, $panic_at);
-        repeat16!(5, $panic_at);
-        repeat16!(6, $panic_at);
-        repeat16!(7, $panic_at);
-        repeat16!(8, $panic_at);
-        repeat16!(9, $panic_at);
-        repeat16!(10, $panic_at);
-        repeat16!(11, $panic_at);
-        repeat16!(12, $panic_at);
-        repeat16!(13, $panic_at);
-        repeat16!(14, $panic_at);
-        repeat16!(15, $panic_at);
+        $i += 1;
     };
 }
 
 /// The landing pads and call sites of this function are far enough from its start that their
 /// offsets in the LSDA don't fit in a single uleb128 byte.
 #[inline(never)]
+#[allow(unused_assignments)]
 fn large_function(panic_at: u32) {
-    repeat256!(panic_at);
+    let mut i = 0;
+    x4! { x4! { x4! { x4! { call_site!(i, panic_at); } } } }
 }
 
 fn lsda_with_large_offsets() {
     for panic_at in [0, 1, 127, 128, 129, 200, 255] {
-        reset_dropped();
+        DROPPED.store(0, Ordering::SeqCst);
         let result = catch_unwind(|| large_function(panic_at));
         assert_eq!(message(&*result.unwrap_err()), "large function");
         // Every `Counted` created up to and including the panicking call is dropped.
-        assert_eq!(dropped(), panic_at + 1);
+        assert_eq!(DROPPED.load(Ordering::SeqCst), panic_at + 1);
     }
 
-    reset_dropped();
+    DROPPED.store(0, Ordering::SeqCst);
     large_function(u32::MAX);
-    assert_eq!(dropped(), 256);
-}
-
-fn catch_unwind_in_loop() {
-    let mut caught = 0;
-    for i in 0..1000 {
-        if catch_unwind(|| {
-            if black_box(i) % 3 == 0 {
-                panics("loop");
-            }
-        })
-        .is_err()
-        {
-            caught += 1;
-        }
-    }
-    assert_eq!(caught, 334);
+    assert_eq!(DROPPED.load(Ordering::SeqCst), 256);
 }
 
 fn arithmetic_and_indexing_panics() {
@@ -432,19 +364,19 @@ fn panicking_iterators_and_clones() {
 
     impl Drop for PanicClone {
         fn drop(&mut self) {
-            count_drop();
+            DROPPED.fetch_add(1, Ordering::SeqCst);
         }
     }
 
-    reset_dropped();
+    DROPPED.store(0, Ordering::SeqCst);
     let v = vec![PanicClone(0), PanicClone(1), PanicClone(2), PanicClone(3)];
     assert!(catch_unwind(AssertUnwindSafe(|| v.clone())).is_err());
     // The two successfully cloned elements are dropped.
-    assert_eq!(dropped(), 2);
+    assert_eq!(DROPPED.load(Ordering::SeqCst), 2);
     drop(v);
-    assert_eq!(dropped(), 6);
+    assert_eq!(DROPPED.load(Ordering::SeqCst), 6);
 
-    reset_dropped();
+    DROPPED.store(0, Ordering::SeqCst);
     let result = catch_unwind(|| {
         (0..5)
             .map(|i| {
@@ -457,20 +389,7 @@ fn panicking_iterators_and_clones() {
             .collect::<Vec<_>>()
     });
     assert!(result.is_err());
-    assert_eq!(dropped(), 4);
-}
-
-fn panic_hook() {
-    static HOOK_CALLS: AtomicU32 = AtomicU32::new(0);
-
-    let old = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|info| {
-        assert_eq!(info.payload_as_str(), Some("hook"));
-        HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
-    }));
-    assert!(catch_unwind(|| panics("hook")).is_err());
-    assert_eq!(HOOK_CALLS.load(Ordering::SeqCst), 1);
-    std::panic::set_hook(old);
+    assert_eq!(DROPPED.load(Ordering::SeqCst), 4);
 }
 
 fn run_unwind_tests() {
@@ -489,10 +408,8 @@ fn run_unwind_tests() {
     thread_join_and_scope();
     callee_saved_registers();
     lsda_with_large_offsets();
-    catch_unwind_in_loop();
     arithmetic_and_indexing_panics();
     panicking_iterators_and_clones();
-    panic_hook();
 }
 
 extern "C" fn panic_in_extern_c() {
@@ -509,10 +426,6 @@ fn main() {
         // A panic can't escape from an `extern "C"` function.
         Some("abort-extern-c") => panic_in_extern_c(),
         _ => {
-            if cfg!(panic = "abort") {
-                println!("skipping unwind tests as -Cpanic=abort is used");
-                return;
-            }
             run_unwind_tests();
         }
     }

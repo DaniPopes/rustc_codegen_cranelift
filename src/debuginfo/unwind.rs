@@ -8,7 +8,7 @@ use cranelift_object::ObjectProduct;
 use gimli::write::{Address, CieId, EhFrame, FrameTable, Section};
 use gimli::{Encoding, Format, RunTimeEndian};
 use rustc_session::Session;
-use rustc_target::spec::{Arch, PanicStrategy};
+use rustc_target::spec::{Arch, BinaryFormat, PanicStrategy};
 
 use super::emit::{DebugRelocName, address_for_data, address_for_func};
 use super::gcc_except_table::{
@@ -26,9 +26,10 @@ pub(crate) const EXCEPTION_HANDLER_CATCH: u32 = 1;
 /// `.eh_frame` and `.gcc_except_table`, which is ELF on x86_64 and aarch64.
 pub(crate) fn unwinding_enabled(sess: &Session) -> bool {
     sess.panic_strategy() == PanicStrategy::Unwind
-        && matches!(sess.target.arch, Arch::X86_64 | Arch::AArch64)
-        && !sess.target.is_like_windows
-        && !sess.target.is_like_darwin
+        && matches!(
+            (sess.target.binary_format, &sess.target.arch),
+            (BinaryFormat::Elf, Arch::X86_64 | Arch::AArch64)
+        )
 }
 
 pub(crate) struct UnwindContext {

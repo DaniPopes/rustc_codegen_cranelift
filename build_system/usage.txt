@@ -34,7 +34,7 @@ OPTIONS:
     --panic-unwind-support
             Build the sysroot with -Cpanic=unwind instead of -Cpanic=abort. This is the default on
             targets where the backend supports unwinding: x86_64 and aarch64 ELF targets such as
-            Linux and FreeBSD. It is not yet supported on other targets, like Windows and macOS.
+            Linux and FreeBSD. Passing it for any other target, like Windows and macOS, is an error.
 
     --no-panic-unwind-support
             Build the sysroot with -Cpanic=abort and default the wrappers to it, even on targets

@@ -152,14 +152,9 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         }
         runner.run_rustc(["example/unwind.rs"]);
         runner.run_out_command("unwind", &[]);
-    }),
-    TestCase::custom("aot.unwind_abort", &|runner| {
-        if !runner.panic_unwind_support {
-            eprintln!("Unwinding is not supported on this target");
-            return;
-        }
-        runner.run_rustc(["example/unwind.rs"]);
 
+        // A panic in a destructor during cleanup and a panic escaping from an `extern "C"`
+        // function have to abort.
         for (arg, message) in [
             ("abort-in-drop", "panic in a destructor during cleanup"),
             ("abort-extern-c", "panic in a function that cannot unwind"),
