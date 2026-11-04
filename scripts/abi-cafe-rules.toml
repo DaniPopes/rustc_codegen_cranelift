@@ -6,12 +6,120 @@
 'OptionU128::conv_rust::repr_c::rustc_caller'.busted = "run"
 'OptionU128::conv_rust::repr_c::cgclif_caller'.busted = "check"
 
+[target.'cfg(all(target_arch = "x86_64", not(windows)))']
+# A 128-bit integer that doesn't fit in the remaining integer registers is passed on the stack, and
+# Cranelift also uses up the register that is left, so the next integer argument is read from the
+# wrong place.
+'Exhaust_i128'.busted = "check"
+'Exhaust_u128'.busted = "check"
+
+# An aggregate with an alignment of 16 bytes that is passed on the stack is placed at an 8-byte
+# aligned offset by Cranelift, because the stack argument purpose has no alignment.
+'Exhaust_Align16U64::conv_c'.busted = "check"
+'Exhaust_Align16U8::conv_c'.busted = "check"
+'Exhaust_F128x1::conv_c::repr_c::rustc_calls_cgclif'.busted = "check"
+'Exhaust_F128x1::conv_c::repr_c::cgclif_calls_rustc'.busted = "check"
+'Exhaust_F128x1::conv_c::repr_c::cgclif_calls_cc'.busted = "check"
+'Exhaust_F128x1::conv_c::repr_c::cc_calls_cgclif'.busted = "check"
+'Exhaust_UnionU128F64::conv_c'.busted = "check"
+
+# Both of the above.
+'Exhaust_OptionI128::conv_c::repr_rust::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionI128::conv_c::repr_c::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionI128::conv_c::repr_rust::cgclif_calls_rustc'.busted = "check"
+'Exhaust_OptionI128::conv_c::repr_c::cgclif_calls_rustc'.busted = "check"
+'Exhaust_OptionI128::conv_rust::repr_rust::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionI128::conv_rust::repr_c::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionI128::conv_rust::repr_rust::cgclif_calls_rustc'.busted = "check"
+'Exhaust_OptionI128::conv_rust::repr_c::cgclif_calls_rustc'.busted = "check"
+'Exhaust_U128F64'.busted = "check"
+'Exhaust_U128U64'.busted = "check"
+'Exhaust_U64U128'.busted = "check"
+'Exhaust_U8U128'.busted = "check"
+'Exhaust_ZstBetween'.busted = "check"
+
+[target.'cfg(all(target_arch = "aarch64", target_vendor = "apple"))']
+# A 128-bit integer that doesn't fit in the remaining integer registers is passed on the stack, but
+# Cranelift still lets the next integer argument use the register that is left.
+'Exhaust_OptionI128::conv_rust::repr_rust::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionI128::conv_rust::repr_c::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionI128::conv_rust::repr_rust::cgclif_calls_rustc'.busted = "check"
+'Exhaust_OptionI128::conv_rust::repr_c::cgclif_calls_rustc'.busted = "check"
+'Exhaust_U128F64::conv_rust'.busted = "check"
+'Exhaust_U128U64::conv_rust'.busted = "check"
+'Exhaust_U64U128::conv_rust'.busted = "check"
+'Exhaust_U8U128::conv_rust'.busted = "check"
+'Exhaust_UnionU128F64::conv_c'.busted = "check"
+'Exhaust_ZstBetween::conv_rust'.busted = "check"
+'Exhaust_i128'.busted = "check"
+'Exhaust_u128'.busted = "check"
+'OptionI128::conv_rust::repr_c::rustc_calls_cgclif'.busted = "run"
+'OptionI128::conv_rust::repr_c::cgclif_calls_rustc'.busted = "check"
+'U64U128::conv_rust::repr_c::rustc_calls_cgclif'.busted = "check"
+'U64U128::conv_rust::repr_c::cgclif_calls_rustc'.busted = "check"
+'U8U128::conv_rust::repr_c::rustc_calls_cgclif'.busted = "check"
+'U8U128::conv_rust::repr_c::cgclif_calls_rustc'.busted = "check"
+
+# An aggregate that is passed as several registers, such as a pair of integers or a float array,
+# must go on the stack as a whole when the registers that are left cannot hold all of it. Cranelift
+# assigns each part separately, so it splits the aggregate between registers and the stack.
+'ArrayF32x3::conv_c'.busted = "check"
+'ArrayF64x3::conv_c'.busted = "check"
+'Exhaust_Align16U64::conv_c'.busted = "check"
+'Exhaust_Align16U8::conv_c'.busted = "check"
+'Exhaust_ArrayU64x2::conv_c'.busted = "check"
+'Exhaust_F16x4::conv_c'.busted = "check"
+'Exhaust_F32x2::conv_c'.busted = "check"
+'Exhaust_F32x3::conv_c'.busted = "check"
+'Exhaust_F32x4::conv_c'.busted = "check"
+'Exhaust_F64U64::conv_c'.busted = "check"
+'Exhaust_F64x2::conv_c'.busted = "check"
+'Exhaust_F64x3::conv_c'.busted = "check"
+'Exhaust_F64x4::conv_c'.busted = "check"
+'Exhaust_NestedF32x2F32::conv_c'.busted = "check"
+'Exhaust_OptionF64::conv_c::repr_rust::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionF64::conv_c::repr_c::rustc_calls_cgclif'.busted = "run"
+'Exhaust_OptionF64::conv_c::repr_rust::cgclif_calls_rustc'.busted = "check"
+'Exhaust_OptionF64::conv_c::repr_c::cgclif_calls_rustc'.busted = "check"
+'Exhaust_ResultU64U32::conv_c::repr_rust::rustc_calls_cgclif'.busted = "run"
+'Exhaust_ResultU64U32::conv_c::repr_c::rustc_calls_cgclif'.busted = "run"
+'Exhaust_ResultU64U32::conv_c::repr_rust::cgclif_calls_rustc'.busted = "check"
+'Exhaust_ResultU64U32::conv_c::repr_c::cgclif_calls_rustc'.busted = "check"
+'Exhaust_U16x8::conv_c'.busted = "check"
+'Exhaust_U32U64::conv_c'.busted = "check"
+'Exhaust_U32x3::conv_c'.busted = "check"
+'Exhaust_U64x2::conv_c'.busted = "check"
+'Exhaust_U8x9::conv_c'.busted = "check"
+'F32x3::conv_c'.busted = "check"
+'F64x3::conv_c'.busted = "check"
+'NestedF32x2F32::conv_c'.busted = "check"
+
+# Random signatures run into both of the above.
+'RandomMix1::conv_c'.busted = "run"
+'RandomMix2::conv_c'.busted = "run"
+'RandomMix3::conv_c'.busted = "run"
+'RandomMix4::conv_c::repr_rust::rustc_calls_cgclif'.busted = "run"
+'RandomMix4::conv_c::repr_c::rustc_calls_cgclif'.busted = "run"
+'RandomMix4::conv_c::repr_rust::cgclif_calls_rustc'.busted = "check"
+'RandomMix4::conv_c::repr_c::cgclif_calls_rustc'.busted = "check"
+'RandomMix5::conv_c::repr_rust::rustc_calls_cgclif'.busted = "run"
+'RandomMix5::conv_c::repr_c::rustc_calls_cgclif'.busted = "run"
+'RandomMix5::conv_c::repr_rust::cgclif_calls_rustc'.busted = "check"
+'RandomMix5::conv_c::repr_c::cgclif_calls_rustc'.busted = "check"
+'RandomMix6::conv_c'.busted = "run"
+'RandomMix7::conv_c::repr_rust::rustc_calls_cgclif'.busted = "run"
+'RandomMix7::conv_c::repr_c::rustc_calls_cgclif'.busted = "run"
+'RandomMix7::conv_c::repr_rust::cgclif_calls_rustc'.busted = "check"
+'RandomMix7::conv_c::repr_c::cgclif_calls_rustc'.busted = "check"
+'RandomMix8::conv_c'.busted = "run"
+
 [target.'cfg(all(target_arch = "x86_64", target_env = "msvc"))']
 # ICE: https://github.com/rust-lang/rust/issues/164207
 'EmptyStruct::conv_c::repr_c::rustc_calls_cgclif'.run = "skip"
 
-[target.'*'.'f16']
-run = "skip"
-
-[target.'*'.'f128']
-run = "skip"
+# abi-cafe ignores the result of f16 with the C convention on x86_64 Linux, because the GCC of its CI
+# is too old to support _Float16. Rust to Rust does not involve GCC, so check those.
+[target.x86_64-unknown-linux-gnu.'f16::conv_c::rustc_calls_cgclif']
+pass = "check"
+[target.x86_64-unknown-linux-gnu.'f16::conv_c::cgclif_calls_rustc']
+pass = "check"

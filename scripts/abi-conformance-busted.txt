@@ -1,0 +1,43 @@
+# Cases of example/abi-conformance.rs that are known to mismatch, one per line:
+#
+#     <target prefix> <callee backend>_<caller backend> <case>
+#
+# The test fails when a listed case passes, so that the entry gets removed once the bug is fixed.
+
+# An i128 argument that does not fit in the remaining integer registers goes on the stack, and
+# Cranelift also uses up the register that is left, so the next integer argument is read from the
+# wrong place.
+x86_64 llvm_clif i128_after_five_u64
+x86_64 llvm_clif u128_after_five_u64
+x86_64 llvm_clif rust_u128_after_five_u64
+x86_64 llvm_clif rust_pair_after_five_u64
+x86_64 llvm_clif unwind_u128_after_five_u64
+x86_64 clif_llvm i128_after_five_u64
+x86_64 clif_llvm u128_after_five_u64
+x86_64 clif_llvm rust_u128_after_five_u64
+x86_64 clif_llvm rust_pair_after_five_u64
+x86_64 clif_llvm unwind_u128_after_five_u64
+x86_64 llvm_clif u128_pair_return
+x86_64 llvm_clif variadic_u128_after_four_u64
+
+# An aggregate with an alignment of 16 that is passed on the stack is placed at an 8-byte aligned
+# offset by Cranelift, because the stack argument purpose has no alignment.
+x86_64 llvm_clif align16_after_seven_u64
+x86_64 llvm_clif wrapped_u128_after_seven_u64
+x86_64 llvm_clif wrapped_f128_after_nine_f64
+x86_64 clif_llvm align16_after_seven_u64
+x86_64 clif_llvm wrapped_u128_after_seven_u64
+x86_64 clif_llvm wrapped_f128_after_nine_f64
+
+# An aggregate or integer that takes two registers does not fit when only one integer register is
+# left. It goes on the stack, and the next integer argument must go on the stack too, but Cranelift
+# puts it in the register that is left.
+aarch64 llvm_clif u128_after_seven_u64
+aarch64 llvm_clif align16_after_seven_u64
+aarch64 llvm_clif wrapped_u128_after_seven_u64
+aarch64 clif_llvm u128_after_seven_u64
+aarch64 clif_llvm align16_after_seven_u64
+aarch64 clif_llvm wrapped_u128_after_seven_u64
+
+# The same for a variadic argument, which is only passed in registers on Linux.
+aarch64-unknown-linux llvm_clif variadic_u128_after_six_u64

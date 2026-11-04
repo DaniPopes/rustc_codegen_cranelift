@@ -27,6 +27,7 @@ aot.mixed_backend_abi
 aot.issue-59326
 aot.gen_block_iterate
 aot.raw-dylib
+aot.abi_conformance
 test.sysroot
 
 testsuite.extended_sysroot

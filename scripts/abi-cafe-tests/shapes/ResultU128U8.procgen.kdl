@@ -1,0 +1,4 @@
+tagged "ResultU128U8" {
+  Ok { _ "u128"; }
+  Err { _ "u8"; }
+}

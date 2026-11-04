@@ -1,0 +1,3 @@
+struct "ArrayF32x3" {
+    _ "[f32; 3]"
+}

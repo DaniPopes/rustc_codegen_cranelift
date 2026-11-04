@@ -1,0 +1,9 @@
+struct "NestedF32x2F32" {
+    _ "F32x2"
+    _ "f32"
+}
+
+struct "F32x2" {
+    _ "f32"
+    _ "f32"
+}
