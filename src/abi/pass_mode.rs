@@ -1,19 +1,55 @@
 //! Argument passing
 
+use std::borrow::Cow;
+
 use cranelift_codegen::ir::ArgumentPurpose;
-use rustc_abi::{Reg, RegKind};
+use rustc_abi::{CanonAbi, Reg, RegKind};
 use rustc_target::callconv::{
     ArgAbi, ArgAttributes, ArgExtension as RustcArgExtension, CastTarget, IndirectMode, PassMode,
+    Uniform,
 };
 use smallvec::{SmallVec, smallvec};
 
-use super::ArgValue;
+use super::{ArgValue, is_tail_conv};
 use crate::prelude::*;
 use crate::value_and_place::assert_assignable;
 
 pub(super) trait ArgAbiExt<'tcx> {
-    fn get_abi_param(&self, tcx: TyCtxt<'tcx>) -> SmallVec<[AbiParam; 2]>;
-    fn get_abi_return(&self, tcx: TyCtxt<'tcx>) -> (Option<AbiParam>, Vec<AbiParam>);
+    fn get_abi_param(&self, tcx: TyCtxt<'tcx>, conv: CanonAbi) -> SmallVec<[AbiParam; 2]>;
+    fn get_abi_return(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        conv: CanonAbi,
+    ) -> (Option<AbiParam>, Vec<AbiParam>);
+}
+
+/// Cranelift's `tail` calling convention can't pass `PassMode::Indirect { mode: OnStack }`
+/// arguments as `StructArgument` (unsupported on aarch64 and incompatible with `return_call`), so
+/// pass them as a sequence of pointer sized integers instead. Cranelift puts those on the stack
+/// when they don't fit in registers and lets a tail call change the size of the argument area.
+pub(super) fn adjust_arg_abi_for_conv<'a, 'tcx>(
+    tcx: TyCtxt<'tcx>,
+    arg_abi: &'a ArgAbi<'tcx, Ty<'tcx>>,
+    conv: CanonAbi,
+) -> Cow<'a, ArgAbi<'tcx, Ty<'tcx>>> {
+    if !is_tail_conv(conv)
+        || !matches!(arg_abi.mode, PassMode::Indirect { mode: IndirectMode::OnStack, .. })
+    {
+        return Cow::Borrowed(arg_abi);
+    }
+
+    let unit = Reg { kind: RegKind::Integer, size: tcx.data_layout.pointer_size() };
+    let total = arg_abi.layout.size.align_to(tcx.data_layout.pointer_align());
+    // Cranelift pops the arguments of the `tail` calling convention with a 16 bit immediate.
+    if total.bytes() >= 1 << 15 {
+        tcx.dcx().fatal(format!(
+            "`extern \"tail\"` argument of type `{}` is too large for Cranelift",
+            arg_abi.layout.ty
+        ));
+    }
+    let mut arg_abi = arg_abi.clone();
+    arg_abi.cast_to(Uniform::new(unit, total));
+    Cow::Owned(arg_abi)
 }
 
 fn reg_to_abi_param(reg: Reg) -> AbiParam {
@@ -97,21 +133,22 @@ fn cast_target_to_abi_params(cast: &CastTarget) -> SmallVec<[(Size, AbiParam); 2
 }
 
 impl<'tcx> ArgAbiExt<'tcx> for ArgAbi<'tcx, Ty<'tcx>> {
-    fn get_abi_param(&self, tcx: TyCtxt<'tcx>) -> SmallVec<[AbiParam; 2]> {
-        match self.mode {
+    fn get_abi_param(&self, tcx: TyCtxt<'tcx>, conv: CanonAbi) -> SmallVec<[AbiParam; 2]> {
+        let this = adjust_arg_abi_for_conv(tcx, self, conv);
+        match this.mode {
             PassMode::Ignore => smallvec![],
-            PassMode::Direct(attrs) => match self.layout.backend_repr {
+            PassMode::Direct(attrs) => match this.layout.backend_repr {
                 BackendRepr::Scalar(scalar) => smallvec![apply_attrs_to_abi_param(
                     AbiParam::new(scalar_to_clif_type(tcx, scalar)),
                     attrs
                 )],
                 BackendRepr::SimdVector { .. } => {
-                    let vector_ty = crate::intrinsics::clif_vector_type(tcx, self.layout);
+                    let vector_ty = crate::intrinsics::clif_vector_type(tcx, this.layout);
                     smallvec![AbiParam::new(vector_ty)]
                 }
-                _ => unreachable!("{:?}", self.layout.backend_repr),
+                _ => unreachable!("{:?}", this.layout.backend_repr),
             },
-            PassMode::Pair(attrs_a, attrs_b) => match self.layout.backend_repr {
+            PassMode::Pair(attrs_a, attrs_b) => match this.layout.backend_repr {
                 BackendRepr::ScalarPair { a, b, b_offset: _ } => {
                     let a = scalar_to_clif_type(tcx, a);
                     let b = scalar_to_clif_type(tcx, b);
@@ -120,7 +157,7 @@ impl<'tcx> ArgAbiExt<'tcx> for ArgAbi<'tcx, Ty<'tcx>> {
                         apply_attrs_to_abi_param(AbiParam::new(b), attrs_b),
                     ]
                 }
-                _ => unreachable!("{:?}", self.layout.backend_repr),
+                _ => unreachable!("{:?}", this.layout.backend_repr),
             },
             PassMode::Cast { ref cast, pad_i32_count } => {
                 assert_eq!(pad_i32_count, 0, "padding support not yet implemented");
@@ -133,7 +170,7 @@ impl<'tcx> ArgAbiExt<'tcx> for ArgAbi<'tcx, Ty<'tcx>> {
                 );
                 if mode == IndirectMode::OnStack {
                     // Abi requires aligning struct size to pointer size
-                    let size = self.layout.size.align_to(tcx.data_layout.pointer_align());
+                    let size = this.layout.size.align_to(tcx.data_layout.pointer_align());
                     let size = u32::try_from(size.bytes()).unwrap();
                     smallvec![apply_attrs_to_abi_param(
                         AbiParam::special(pointer_ty(tcx), ArgumentPurpose::StructArgument(size),),
@@ -152,7 +189,11 @@ impl<'tcx> ArgAbiExt<'tcx> for ArgAbi<'tcx, Ty<'tcx>> {
         }
     }
 
-    fn get_abi_return(&self, tcx: TyCtxt<'tcx>) -> (Option<AbiParam>, Vec<AbiParam>) {
+    fn get_abi_return(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        conv: CanonAbi,
+    ) -> (Option<AbiParam>, Vec<AbiParam>) {
         match self.mode {
             PassMode::Ignore => (None, vec![]),
             PassMode::Direct(attrs) => match self.layout.backend_repr {
@@ -189,9 +230,16 @@ impl<'tcx> ArgAbiExt<'tcx> for ArgAbi<'tcx, Ty<'tcx>> {
             ),
             PassMode::Indirect { attrs, address_space: _, mode } => {
                 assert!(mode == IndirectMode::Pointer);
+                // Cranelift's `tail` calling convention doesn't support `StructReturn` on aarch64.
+                // The return pointer is a plain first parameter for it.
+                let purpose = if is_tail_conv(conv) {
+                    ArgumentPurpose::Normal
+                } else {
+                    ArgumentPurpose::StructReturn
+                };
                 (
                     Some(apply_attrs_to_abi_param(
-                        AbiParam::special(pointer_ty(tcx), ArgumentPurpose::StructReturn),
+                        AbiParam::special(pointer_ty(tcx), purpose),
                         attrs,
                     )),
                     vec![],
@@ -256,8 +304,10 @@ pub(super) fn adjust_arg_for_abi<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     arg: CValue<'tcx>,
     arg_abi: &ArgAbi<'tcx, Ty<'tcx>>,
+    conv: CanonAbi,
     is_owned: bool,
 ) -> SmallVec<[Value; 2]> {
+    let arg_abi = &*adjust_arg_abi_for_conv(fx.tcx, arg_abi, conv);
     assert_assignable(fx, arg.layout().ty, arg_abi.layout.ty, 16);
     match arg_abi.mode {
         PassMode::Ignore => smallvec![],
@@ -292,10 +342,12 @@ pub(super) fn cvalue_for_param<'tcx>(
     local: Option<mir::Local>,
     local_field: Option<usize>,
     arg_abi: &ArgAbi<'tcx, Ty<'tcx>>,
+    conv: CanonAbi,
     block_params_iter: &mut impl Iterator<Item = Value>,
 ) -> Option<ArgValue<'tcx>> {
+    let arg_abi = &*adjust_arg_abi_for_conv(fx.tcx, arg_abi, conv);
     let block_params = arg_abi
-        .get_abi_param(fx.tcx)
+        .get_abi_param(fx.tcx, conv)
         .into_iter()
         .map(|abi_param| {
             let block_param = block_params_iter.next().unwrap();
