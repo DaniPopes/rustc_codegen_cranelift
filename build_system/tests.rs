@@ -149,6 +149,34 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
     TestCase::build_bin_and_run("aot.raw-dylib", "example/raw-dylib.rs", &[]),
+    TestCase::custom("aot.target_features_cfg", &|runner| {
+        let variants: &[(&str, &[&str])] = if runner.target_compiler.target.starts_with("x86_64") {
+            &[
+                ("x86_64_v3", &["-Ctarget-cpu=x86-64-v3"]),
+                ("plus_avx2", &["-Ctarget-feature=+avx2"]),
+                (
+                    "x86_64_v3_minus_avx2",
+                    &["-Ctarget-cpu=x86-64-v3", "-Ctarget-feature=-avx2"],
+                ),
+                ("znver5", &["-Ctarget-cpu=znver5"]),
+            ]
+        } else if runner.target_compiler.target.starts_with("aarch64") {
+            &[("apple_m1", &["-Ctarget-cpu=apple-m1"])]
+        } else {
+            &[]
+        };
+
+        for &(cfg, flags) in variants {
+            let mut cmd = runner.rustc_command([
+                "example/target-features-cfg.rs",
+                "--emit=obj",
+                "--cfg",
+                cfg,
+            ]);
+            cmd.args(flags);
+            spawn_and_wait(cmd);
+        }
+    }),
     TestCase::custom("test.sysroot", &|runner| {
         apply_patches(
             &runner.dirs,

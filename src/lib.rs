@@ -13,6 +13,7 @@
 extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_attr_ir;
+extern crate rustc_codegen_llvm;
 extern crate rustc_codegen_ssa;
 extern crate rustc_const_eval;
 extern crate rustc_data_structures;
@@ -38,6 +39,7 @@ use std::sync::Arc;
 
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
+use rustc_codegen_llvm::LlvmCodegenBackend;
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo, TargetConfig, back};
 use rustc_data_structures::unord::UnordSet;
@@ -121,6 +123,9 @@ impl<F: Fn() -> String> Drop for PrintOnPanic<F> {
 pub struct CraneliftCodegenBackend {
     // Set by `init` if not already set. (E.g. by cg_clif.)
     pub config: Option<BackendConfig>,
+    /// Used to report the same target features as the LLVM backend would. Its `init` is run by our
+    /// own `init`.
+    llvm: Box<dyn CodegenBackend>,
 }
 
 impl CodegenBackend for CraneliftCodegenBackend {
@@ -153,6 +158,11 @@ impl CodegenBackend for CraneliftCodegenBackend {
             sess.dcx().fatal("JIT mode doesn't work with `cargo check`");
         }
 
+        // LLVM's `init` configures LLVM using `-Cllvm-args`, which it fails on for `jit-mode`.
+        if !config.jit_mode {
+            self.llvm.init(sess);
+        }
+
         CodegenBackendInit {
             global_backend_features: vec![],
             // FIXME workaround for rust-lang/rustc_codegen_cranelift#1717
@@ -163,21 +173,10 @@ impl CodegenBackend for CraneliftCodegenBackend {
     }
 
     fn target_config(&self, sess: &EarlySession) -> TargetConfig {
-        // FIXME return the actually used target features. this is necessary for #[cfg(target_feature)]
-        let target_features = match sess.target.arch {
-            Arch::X86_64 if sess.target.os != Os::None => {
-                // x86_64 mandates SSE2 support and rustc requires the x87 feature to be enabled
-                vec![sym::fxsr, sym::sse, sym::sse2, Symbol::intern("x87")]
-            }
-            Arch::AArch64 => match &sess.target.os {
-                Os::None => vec![],
-                // On macOS the aes, sha2 and sha3 features are enabled by default and ring
-                // fails to compile on macOS when they are not present.
-                Os::MacOs => vec![sym::neon, sym::aes, sym::sha2, sym::sha3],
-                // AArch64 mandates Neon support
-                _ => vec![sym::neon],
-            },
-            _ => vec![],
+        let mut target_config = if self.config.as_ref().is_some_and(|config| config.jit_mode) {
+            fixed_target_config(sess)
+        } else {
+            self.llvm.target_config(sess)
         };
 
         // FIXME(f16_f128): `rustc_codegen_llvm` currently disables support on Windows GNU
@@ -192,16 +191,13 @@ impl CodegenBackend for CraneliftCodegenBackend {
         // filled in by compiler-builtins. The only libc that provides these currently is glibc.
         let has_reliable_f128_math = has_reliable_f16_f128 && sess.target.env == Env::Gnu;
 
-        TargetConfig {
-            internal_target_features: UnordSet::from_iter(target_features),
-            // `rustc_codegen_cranelift` polyfills functionality not yet
-            // available in Cranelift.
-            has_reliable_f16: has_reliable_f16_f128,
-            has_reliable_f16_math: has_reliable_f16_f128,
-            has_reliable_f16b: false,
-            has_reliable_f128: has_reliable_f16_f128,
-            has_reliable_f128_math,
-        }
+        // `rustc_codegen_cranelift` polyfills functionality not yet available in Cranelift.
+        target_config.has_reliable_f16 = has_reliable_f16_f128;
+        target_config.has_reliable_f16_math = has_reliable_f16_f128;
+        target_config.has_reliable_f16b = false;
+        target_config.has_reliable_f128 = has_reliable_f16_f128;
+        target_config.has_reliable_f128_math = has_reliable_f128_math;
+        target_config
     }
 
     fn print_version(&self) {
@@ -214,12 +210,7 @@ impl CodegenBackend for CraneliftCodegenBackend {
     }
 
     fn target_cpu(&self, sess: &Session) -> String {
-        // FIXME handle `-Ctarget-cpu=native`
-        match sess.opts.cg.target_cpu {
-            Some(ref name) => name,
-            None => sess.target.cpu.as_ref(),
-        }
-        .to_owned()
+        self.llvm.target_cpu(sess)
     }
 
     fn codegen_crate(&self, tcx: TyCtxt<'_>) -> Box<dyn Any> {
@@ -269,6 +260,65 @@ fn target_tuple(sess: &Session) -> target_lexicon::Triple {
         Err(err) => sess.dcx().fatal(format!("target not recognized: {}", err)),
     }
 }
+
+/// The target config used when LLVM isn't available to expand the target cpu into target
+/// features. Only a fixed set of target features is reported.
+fn fixed_target_config(sess: &EarlySession) -> TargetConfig {
+    let target_features = match sess.target.arch {
+        Arch::X86_64 if sess.target.os != Os::None => {
+            // x86_64 mandates SSE2 support and rustc requires the x87 feature to be enabled
+            vec![sym::fxsr, sym::sse, sym::sse2, Symbol::intern("x87")]
+        }
+        Arch::AArch64 => match &sess.target.os {
+            Os::None => vec![],
+            // On macOS the aes, sha2 and sha3 features are enabled by default and ring
+            // fails to compile on macOS when they are not present.
+            Os::MacOs => vec![sym::neon, sym::aes, sym::sha2, sym::sha3],
+            // AArch64 mandates Neon support
+            _ => vec![sym::neon],
+        },
+        _ => vec![],
+    };
+    TargetConfig {
+        internal_target_features: UnordSet::from_iter(target_features),
+        has_reliable_f16: true,
+        has_reliable_f16_math: true,
+        has_reliable_f16b: true,
+        has_reliable_f128: true,
+        has_reliable_f128_math: true,
+    }
+}
+
+/// Rust target features and the Cranelift ISA flags they enable.
+const X86_64_CRANELIFT_FEATURES: &[(&str, &str)] = &[
+    ("avx", "has_avx"),
+    ("avx2", "has_avx2"),
+    ("avx512bitalg", "has_avx512bitalg"),
+    ("avx512dq", "has_avx512dq"),
+    ("avx512f", "has_avx512f"),
+    ("avx512vbmi", "has_avx512vbmi"),
+    ("avx512vl", "has_avx512vl"),
+    ("avx512vnni", "has_avx512vnni"),
+    ("avxvnni", "has_avx_vnni"),
+    ("bmi1", "has_bmi1"),
+    ("bmi2", "has_bmi2"),
+    ("cmpxchg16b", "has_cmpxchg16b"),
+    ("fma", "has_fma"),
+    ("lzcnt", "has_lzcnt"),
+    ("popcnt", "has_popcnt"),
+    ("sse3", "has_sse3"),
+    ("sse4.1", "has_sse41"),
+    ("sse4.2", "has_sse42"),
+    ("ssse3", "has_ssse3"),
+];
+
+const AARCH64_CRANELIFT_FEATURES: &[(&str, &str)] = &[
+    ("dotprod", "has_dotprod"),
+    ("fp16", "has_fp16"),
+    ("i8mm", "has_i8mm"),
+    ("lse", "has_lse"),
+    ("paca", "has_pauth"),
+];
 
 fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
     use target_lexicon::BinaryFormat;
@@ -344,32 +394,27 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
 
     let flags = settings::Flags::new(flags_builder);
 
-    let isa_builder = match sess.opts.cg.target_cpu.as_deref() {
-        Some(NATIVE_CPU) => cranelift_native::builder_with_options(true).unwrap(),
-        Some(value) => {
-            let mut builder =
-                cranelift_codegen::isa::lookup(target_tuple.clone()).unwrap_or_else(|err| {
-                    sess.dcx().fatal(format!("can't compile for {}: {}", target_tuple, err));
-                });
-            if builder.enable(value).is_err() {
-                sess.dcx()
-                    .fatal("the specified target cpu isn't currently supported by Cranelift.");
-            }
-            builder
-        }
-        None => {
-            let mut builder =
-                cranelift_codegen::isa::lookup(target_tuple.clone()).unwrap_or_else(|err| {
-                    sess.dcx().fatal(format!("can't compile for {}: {}", target_tuple, err));
-                });
-            if target_tuple.architecture == target_lexicon::Architecture::X86_64 {
-                // Only set the target cpu on x86_64 as Cranelift is missing
-                // the target cpu list for most other targets.
-                builder.enable(sess.target.cpu.as_ref()).unwrap();
-            }
-            builder
-        }
+    let mut isa_builder = if sess.opts.cg.target_cpu.as_deref() == Some(NATIVE_CPU) {
+        cranelift_native::builder_with_options(true).unwrap()
+    } else {
+        cranelift_codegen::isa::lookup(target_tuple.clone()).unwrap_or_else(|err| {
+            sess.dcx().fatal(format!("can't compile for {}: {}", target_tuple, err));
+        })
     };
+
+    // The features computed by rustc already include the ones implied by the target cpu and
+    // `-Ctarget-feature`, so don't pass the cpu name to Cranelift. In JIT mode LLVM isn't used to
+    // compute them.
+    let cranelift_features: &[(&str, &str)] = match target_tuple.architecture {
+        _ if jit => &[],
+        target_lexicon::Architecture::X86_64 => X86_64_CRANELIFT_FEATURES,
+        target_lexicon::Architecture::Aarch64(_) => AARCH64_CRANELIFT_FEATURES,
+        _ => &[],
+    };
+    for &(rust_feature, cranelift_flag) in cranelift_features {
+        let enabled = sess.internal_target_features.contains(&Symbol::intern(rust_feature));
+        isa_builder.set(cranelift_flag, if enabled { "true" } else { "false" }).unwrap();
+    }
 
     match isa_builder.finish(flags) {
         Ok(target_isa) => target_isa,
@@ -380,5 +425,5 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
 /// This is the entrypoint for a hot plugged rustc_codegen_cranelift
 #[unsafe(no_mangle)]
 pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {
-    Box::new(CraneliftCodegenBackend { config: None })
+    Box::new(CraneliftCodegenBackend { config: None, llvm: LlvmCodegenBackend::new() })
 }
