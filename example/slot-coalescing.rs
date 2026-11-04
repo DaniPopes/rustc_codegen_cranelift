@@ -2,11 +2,14 @@
 // same time, so a chain like `let b = a; let c = b;` needs one slot instead of three. Every frame
 // of the recursion in `recurse` moves a buffer of `N` bytes through eight locals, with a recursive
 // call while the last one is live. Without coalescing it needs about 3 MiB of stack and
-// overflows the 1 MiB thread stack; with it it needs about 0.5 MiB. `recurse_wrapped` moves a
+// overflows the 1 MiB thread stack; with it it needs about 0.45 MiB. `recurse_wrapped` moves a
 // buffer into and out of enum variants, which are placed at the field, so each frame needs one
 // buffer instead of two. The checks make sure values survive wherever two locals do overlap.
 
+#![feature(custom_mir, core_intrinsics)]
+
 use std::hint::black_box;
+use std::intrinsics::mir::*;
 use std::num::NonZeroU8;
 use std::ops::ControlFlow;
 use std::sync::Mutex;
@@ -233,6 +236,322 @@ fn wrapped_drop_order() {
     assert_eq!(take_log(), [5, 4]);
 }
 
+/// A value that is copied to a second local while the first is live, and then written through
+/// the second. The two must not share a slot, whichever way the second is written.
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct Cp {
+    head: u64,
+    rest: [u64; 31],
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct NzCp(Cp, NonZeroU8);
+
+struct Dg([u64; 8]);
+
+impl Drop for Dg {
+    fn drop(&mut self) {
+        self.0 = [0xdead; 8];
+    }
+}
+
+#[inline(never)]
+fn cp(seed: u64) -> Cp {
+    let mut rest = [0; 31];
+    for (i, r) in rest.iter_mut().enumerate() {
+        *r = seed.wrapping_mul(31).wrapping_add(i as u64);
+    }
+    Cp { head: seed, rest }
+}
+
+#[inline(never)]
+fn cp_sum(c: Cp) -> u64 {
+    c.rest.iter().fold(c.head, |a, &x| a.wrapping_mul(31).wrapping_add(x))
+}
+
+#[inline(never)]
+fn nz_sum(c: NzCp) -> u64 {
+    cp_sum(c.0).wrapping_mul(3).wrapping_add(c.1.get() as u64)
+}
+
+#[inline(never)]
+fn dg(seed: u64) -> Dg {
+    Dg([seed; 8])
+}
+
+#[inline(never)]
+fn nz_cp(c: Cp) -> NzCp {
+    NzCp(c, NonZeroU8::new(9).unwrap())
+}
+
+#[inline(never)]
+fn dg_sum(d: Dg) -> u64 {
+    d.0.iter().fold(0, |a, &x| a.wrapping_mul(31).wrapping_add(x))
+}
+
+/// Overwrites its argument, which the caller may pass by reference without a copy.
+#[inline(never)]
+fn cp_mutate(mut c: Cp) -> Cp {
+    c.rest[0] ^= 0x1234;
+    c.head += 1;
+    c
+}
+
+#[inline(never)]
+fn nz_mutate(mut c: NzCp) -> NzCp {
+    c.1 = NonZeroU8::new(77).unwrap();
+    c.0.rest[1] ^= 5;
+    c
+}
+
+#[inline(never)]
+fn src_write_field(seed: u64) -> u64 {
+    let a = cp(seed);
+    let mut b = a;
+    b.head = 1;
+    b.rest[3] = 2;
+    cp_sum(a).wrapping_mul(3).wrapping_add(cp_sum(b))
+}
+
+#[inline(never)]
+fn src_callee_mutates(seed: u64) -> u64 {
+    let a = cp(seed);
+    let b = a;
+    let y = cp_mutate(b);
+    cp_sum(a).wrapping_mul(3).wrapping_add(cp_sum(y))
+}
+
+#[inline(never)]
+fn src_whole_rewrite(seed: u64) -> u64 {
+    let a = cp(seed);
+    let mut b = a;
+    b = cp(seed + 1);
+    cp_sum(a).wrapping_mul(3).wrapping_add(cp_sum(b))
+}
+
+#[inline(never)]
+fn expected_write_field(seed: u64) -> u64 {
+    let (a, mut b) = (cp(seed), cp(seed));
+    b.head = 1;
+    b.rest[3] = 2;
+    cp_sum(a).wrapping_mul(3).wrapping_add(cp_sum(b))
+}
+
+#[inline(never)]
+fn expected_callee_mutates(seed: u64) -> u64 {
+    let (a, b) = (cp(seed), cp(seed));
+    cp_sum(a).wrapping_mul(3).wrapping_add(cp_sum(cp_mutate(b)))
+}
+
+#[inline(never)]
+fn expected_whole_rewrite(seed: u64) -> u64 {
+    cp_sum(cp(seed)).wrapping_mul(3).wrapping_add(cp_sum(cp(seed + 1)))
+}
+
+#[inline(never)]
+fn expected_mir_write_field(seed: u64) -> u64 {
+    let (a, mut b) = (cp(seed), cp(seed));
+    b.head = 1;
+    cp_sum(a).wrapping_mul(3).wrapping_add(cp_sum(b))
+}
+
+#[inline(never)]
+fn expected_field_callee_mutates(seed: u64) -> u64 {
+    let nz = || NzCp(cp(seed), NonZeroU8::new(9).unwrap());
+    nz_sum(nz_mutate(nz())).wrapping_mul(3).wrapping_add(nz_sum(nz()))
+}
+
+#[inline(never)]
+fn expected_niche(seed: u64) -> u64 {
+    nz_sum(NzCp(cp(seed), NonZeroU8::new(9).unwrap()))
+}
+
+/// The same with the MIR written out, as the MIR optimizations leave it: `b = copy a; b.head = 1;
+/// use(copy a)`.
+#[custom_mir(dialect = "runtime", phase = "optimized")]
+#[inline(never)]
+fn mir_write_field(seed: u64) -> u64 {
+    mir! {
+        let a: Cp;
+        let b: Cp;
+        let r1: u64;
+        let r2: u64;
+        let t: u64;
+        {
+            Call(a = cp(seed), ReturnTo(bb1), UnwindUnreachable())
+        }
+        bb1 = {
+            b = a;
+            b.head = 1;
+            Call(r1 = cp_sum(a), ReturnTo(bb2), UnwindUnreachable())
+        }
+        bb2 = {
+            Call(r2 = cp_sum(b), ReturnTo(bb3), UnwindUnreachable())
+        }
+        bb3 = {
+            t = r1 * 3;
+            RET = t + r2;
+            Return()
+        }
+    }
+}
+
+/// `b = copy a; y = callee(move b); use(copy a)`, where the callee writes the slot of `b`.
+#[custom_mir(dialect = "runtime", phase = "optimized")]
+#[inline(never)]
+fn mir_callee_mutates(seed: u64) -> u64 {
+    mir! {
+        let a: Cp;
+        let b: Cp;
+        let y: Cp;
+        let r1: u64;
+        let r2: u64;
+        let t: u64;
+        {
+            Call(a = cp(seed), ReturnTo(bb1), UnwindUnreachable())
+        }
+        bb1 = {
+            b = a;
+            Call(y = cp_mutate(Move(b)), ReturnTo(bb2), UnwindUnreachable())
+        }
+        bb2 = {
+            Call(r1 = cp_sum(a), ReturnTo(bb3), UnwindUnreachable())
+        }
+        bb3 = {
+            Call(r2 = cp_sum(y), ReturnTo(bb4), UnwindUnreachable())
+        }
+        bb4 = {
+            t = r1 * 3;
+            RET = t + r2;
+            Return()
+        }
+    }
+}
+
+/// `b = copy a; b = call(); use(copy a)`, where the call writes the slot of `b`.
+#[custom_mir(dialect = "runtime", phase = "optimized")]
+#[inline(never)]
+fn mir_call_destination(seed: u64) -> u64 {
+    mir! {
+        let a: Cp;
+        let b: Cp;
+        let r1: u64;
+        let r2: u64;
+        let t: u64;
+        {
+            Call(a = cp(seed), ReturnTo(bb1), UnwindUnreachable())
+        }
+        bb1 = {
+            b = a;
+            Call(b = cp(1), ReturnTo(bb2), UnwindUnreachable())
+        }
+        bb2 = {
+            Call(r1 = cp_sum(a), ReturnTo(bb3), UnwindUnreachable())
+        }
+        bb3 = {
+            Call(r2 = cp_sum(b), ReturnTo(bb4), UnwindUnreachable())
+        }
+        bb4 = {
+            t = r1 * 3;
+            RET = t + r2;
+            Return()
+        }
+    }
+}
+
+/// `x = copy a; o = Some(copy x); SetDiscriminant(o, None); use(copy x)`, where the tag of `o`
+/// is a niche in the bytes of `x`.
+#[custom_mir(dialect = "runtime", phase = "optimized")]
+#[inline(never)]
+fn mir_set_discriminant(seed: u64) -> u64 {
+    mir! {
+        let a: Cp;
+        let x: NzCp;
+        let o: Option<NzCp>;
+        let r: u64;
+        {
+            Call(a = cp(seed), ReturnTo(bb1), UnwindUnreachable())
+        }
+        bb1 = {
+            Call(x = nz_cp(a), ReturnTo(bb2), UnwindUnreachable())
+        }
+        bb2 = {
+            o = Some(x);
+            SetDiscriminant(o, 0);
+            Call(r = nz_sum(x), ReturnTo(bb3), UnwindUnreachable())
+        }
+        bb3 = {
+            RET = r;
+            Return()
+        }
+    }
+}
+
+/// `y = (o as Some).0` out of a copy of `x`, written by a callee, while `x` is used again.
+#[custom_mir(dialect = "runtime", phase = "optimized")]
+#[inline(never)]
+fn mir_field_callee_mutates(seed: u64) -> u64 {
+    mir! {
+        let a: Cp;
+        let x: NzCp;
+        let o: Option<NzCp>;
+        let y: NzCp;
+        let y2: NzCp;
+        let r1: u64;
+        let r2: u64;
+        let t: u64;
+        {
+            Call(a = cp(seed), ReturnTo(bb1), UnwindUnreachable())
+        }
+        bb1 = {
+            Call(x = nz_cp(a), ReturnTo(bb1b), UnwindUnreachable())
+        }
+        bb1b = {
+            o = Some(x);
+            y = Field::<NzCp>(Variant(o, 1), 0);
+            Call(y2 = nz_mutate(Move(y)), ReturnTo(bb2), UnwindUnreachable())
+        }
+        bb2 = {
+            Call(r1 = nz_sum(y2), ReturnTo(bb3), UnwindUnreachable())
+        }
+        bb3 = {
+            Call(r2 = nz_sum(x), ReturnTo(bb4), UnwindUnreachable())
+        }
+        bb4 = {
+            t = r1 * 3;
+            RET = t + r2;
+            Return()
+        }
+    }
+}
+
+/// `b = copy a; drop(b); use(a)`, where the drop glue writes to the slot of `b`.
+#[custom_mir(dialect = "runtime", phase = "optimized")]
+#[inline(never)]
+fn mir_drop_writes(seed: u64) -> u64 {
+    mir! {
+        let a: Dg;
+        let b: Dg;
+        let r: u64;
+        {
+            Call(a = dg(seed), ReturnTo(bb0), UnwindUnreachable())
+        }
+        bb0 = {
+            b = Move(a);
+            Drop(b, ReturnTo(bb1), UnwindUnreachable())
+        }
+        bb1 = {
+            Call(r = dg_sum(Move(a)), ReturnTo(bb2), UnwindUnreachable())
+        }
+        bb2 = {
+            RET = r;
+            Return()
+        }
+    }
+}
+
 #[inline(never)]
 fn drop_order() {
     take_log();
@@ -293,6 +612,21 @@ fn main() {
         .join()
         .unwrap();
     assert_eq!(total, WRAPPED_DEPTH);
+
+    for seed in [3, 1000, u64::MAX / 3] {
+        assert_eq!(src_write_field(seed), expected_write_field(seed));
+        assert_eq!(src_callee_mutates(seed), expected_callee_mutates(seed));
+        assert_eq!(src_whole_rewrite(seed), expected_whole_rewrite(seed));
+        assert_eq!(mir_write_field(seed), expected_mir_write_field(seed));
+        assert_eq!(mir_callee_mutates(seed), expected_callee_mutates(seed));
+        assert_eq!(
+            mir_call_destination(seed),
+            cp_sum(cp(seed)).wrapping_mul(3).wrapping_add(cp_sum(cp(1)))
+        );
+        assert_eq!(mir_set_discriminant(seed), expected_niche(seed));
+        assert_eq!(mir_field_callee_mutates(seed), expected_field_callee_mutates(seed));
+        assert_eq!(mir_drop_writes(seed), dg_sum(Dg([seed; 8])));
+    }
 
     move_in_loop(7);
     wrapped_values(9);

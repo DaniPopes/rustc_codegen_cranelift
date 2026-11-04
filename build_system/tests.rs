@@ -162,6 +162,7 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         };
         run(&["-Copt-level=0"]);
         run(&["-Copt-level=1"]);
+        run(&["-Copt-level=3"]);
         // MIR optimizations merge most moves between locals, so turn them off.
         run(&["-Copt-level=1", "-Zmir-enable-passes=-DestinationPropagation"]);
     }),
