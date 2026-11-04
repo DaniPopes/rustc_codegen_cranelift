@@ -24,6 +24,9 @@ use crate::prelude::*;
 use crate::pretty_clif::{CommentWriter, format_clif_ir_header};
 use crate::{codegen_f16_f128, enable_verifier};
 
+/// The namespace of the user external names of functions.
+pub(crate) const FUNC_NAMESPACE: u32 = 0;
+
 pub(crate) struct CodegenedFunction {
     symbol_name: String,
     pub(crate) func_id: FuncId,
@@ -66,7 +69,7 @@ pub(crate) fn codegen_fn<'tcx>(
     let mut func_ctx = FunctionBuilderContext::new();
     let mut func = cached_func;
     func.clear();
-    func.name = UserFuncName::user(0, func_id.as_u32());
+    func.name = UserFuncName::user(FUNC_NAMESPACE, func_id.as_u32());
     func.signature = sig;
     if debug_context.is_some() {
         func.collect_debug_info();
@@ -147,8 +150,6 @@ pub(crate) fn codegen_fn<'tcx>(
     // Verify function
     verify_func(tcx, &clif_comments, &func);
 
-    let inline = tcx.codegen_instance_attrs(instance.def).inline;
-
     CodegenedFunction {
         symbol_name,
         func_id,
@@ -156,7 +157,7 @@ pub(crate) fn codegen_fn<'tcx>(
         clif_comments,
         func_debug_cx,
         inline_asm,
-        inline,
+        inline: tcx.codegen_instance_attrs(instance.def).inline,
     }
 }
 

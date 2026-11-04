@@ -12,28 +12,25 @@
 use std::borrow::Cow;
 use std::mem;
 
-use cranelift_codegen::cursor::{Cursor, FuncCursor};
 use cranelift_codegen::entity::EntityRef;
 use cranelift_codegen::inline::{Inline, InlineCommand};
 use cranelift_codegen::ir::{
     ArgumentPurpose, ExternalName, GlobalValue, GlobalValueData, InstructionData, Opcode,
+    RelSourceLoc,
 };
 use rustc_attr_ir::InlineAttr;
 use rustc_errors::DiagCtxtHandle;
 
-use crate::base::CodegenedFunction;
+use crate::base::{CodegenedFunction, FUNC_NAMESPACE};
 use crate::prelude::*;
 
 /// Without `#[inline(always)]` only callees that don't call anything and have at most this many
 /// instructions, not counting nops and jumps, are inlined, and only when optimizing.
 const MAX_LEAF_INSTS: usize = 100;
 
-/// The namespace of the user external names of functions. See `UserFuncName::user(0, ..)` in
-/// `codegen_fn`.
-const FUNC_NAMESPACE: u32 = 0;
-
 #[derive(Clone, Copy)]
 struct Summary {
+    inline: InlineAttr,
     insts: usize,
     has_calls: bool,
     /// Whether the function can't be inlined: it depends on its own frame, tail calls or has a
@@ -42,8 +39,9 @@ struct Summary {
 }
 
 impl Summary {
-    fn new(func: &Function) -> Summary {
+    fn new(func: &Function, inline: InlineAttr) -> Summary {
         let mut summary = Summary {
+            inline,
             insts: 0,
             has_calls: false,
             pinned: func
@@ -72,30 +70,23 @@ impl Summary {
         }
         summary
     }
-}
 
-#[derive(Clone, Copy)]
-struct Policy {
-    optimize: bool,
-}
-
-impl Policy {
     /// Whether a call to a function with this body is worth inlining.
-    fn should_inline(self, attr: &InlineAttr, summary: Summary) -> bool {
-        !summary.pinned
-            && match attr {
+    fn should_inline(self, optimize: bool) -> bool {
+        !self.pinned
+            && match self.inline {
                 InlineAttr::Never => false,
                 InlineAttr::Always | InlineAttr::Force { .. } => true,
                 InlineAttr::None | InlineAttr::Hint => {
-                    self.optimize && !summary.has_calls && summary.insts <= MAX_LEAF_INSTS
+                    optimize && !self.has_calls && self.insts <= MAX_LEAF_INSTS
                 }
             }
     }
 
     /// Whether a function might get inlined once its own calls are inlined. Inlining makes a
     /// function larger, so this is only false for functions that stay too large.
-    fn may_inline(self, attr: &InlineAttr, summary: Summary) -> bool {
-        self.should_inline(attr, Summary { has_calls: false, ..summary })
+    fn may_inline(self, optimize: bool) -> bool {
+        Summary { has_calls: false, ..self }.should_inline(optimize)
     }
 }
 
@@ -104,51 +95,51 @@ pub(crate) fn inline_cgu(
     optimize: bool,
     functions: &mut [CodegenedFunction],
 ) {
-    let policy = Policy { optimize };
-
     let index = functions
         .iter()
         .enumerate()
         .map(|(idx, function)| (function.func_id, idx))
         .collect::<FxHashMap<_, _>>();
-    let mut summaries = functions.iter().map(|f| Summary::new(&f.func)).collect::<Vec<_>>();
-    let (order, callees) = callees_first_order(policy, functions, &summaries, &index);
+    let mut summaries =
+        functions.iter().map(|f| Summary::new(&f.func, f.inline)).collect::<Vec<_>>();
+    if !summaries.iter().any(|summary| summary.may_inline(optimize)) {
+        return;
+    }
+    let (order, callees) = callees_first_order(optimize, functions, &summaries, &index);
 
     let mut processed = vec![false; functions.len()];
     let mut ctx = Context::new();
     for caller in order {
-        if callees[caller].is_empty() {
-            processed[caller] = true;
-            continue;
-        }
-        ctx.func = mem::replace(&mut functions[caller].func, Function::new());
-        let own_slots = ctx.func.sized_stack_slots.len();
-        let own_insts = ctx.func.dfg.num_insts();
+        if !callees[caller].is_empty() {
+            ctx.func = mem::replace(&mut functions[caller].func, Function::new());
+            let own_slots = ctx.func.sized_stack_slots.len();
+            let own_insts = ctx.func.dfg.num_insts();
 
-        let mut call_sites = CallSites {
-            policy,
-            functions,
-            index: &index,
-            summaries: &summaries,
-            processed: &processed,
-            caller,
-            slot_ranges: Vec::new(),
-            global_values: Vec::new(),
-        };
-        let inlined_any = ctx
-            .inline(&mut call_sites)
-            .unwrap_or_else(|err| dcx.fatal(format!("failed to inline calls: {err:?}")));
-        let CallSites { slot_ranges, global_values, .. } = call_sites;
+            let mut call_sites = CallSites {
+                optimize,
+                functions,
+                index: &index,
+                summaries: &summaries,
+                processed: &processed,
+                caller,
+                slot_ranges: Vec::new(),
+                global_values: Vec::new(),
+            };
+            let inlined_any = ctx
+                .inline(&mut call_sites)
+                .unwrap_or_else(|err| dcx.fatal(format!("failed to inline calls: {err:?}")));
+            let CallSites { slot_ranges, global_values, .. } = call_sites;
 
-        if inlined_any {
-            fix_inlined_symbol_names(&mut ctx.func, functions, &global_values);
-            overlay_inlined_stack_slots(&mut ctx.func, own_slots, &slot_ranges);
-            if functions[caller].func_debug_cx.is_some() {
-                attribute_inlined_insts_to_call_sites(&mut ctx.func, own_insts);
+            if inlined_any {
+                fix_inlined_symbol_names(&mut ctx.func, functions, &global_values);
+                overlay_inlined_stack_slots(&mut ctx.func, own_slots, &slot_ranges);
+                if functions[caller].func_debug_cx.is_some() {
+                    attribute_inlined_insts_to_call_sites(&mut ctx.func, own_insts);
+                }
+                summaries[caller] = Summary::new(&ctx.func, functions[caller].inline);
             }
-            summaries[caller] = Summary::new(&ctx.func);
+            functions[caller].func = mem::replace(&mut ctx.func, Function::new());
         }
-        functions[caller].func = mem::replace(&mut ctx.func, Function::new());
         processed[caller] = true;
     }
 }
@@ -158,7 +149,7 @@ pub(crate) fn inline_cgu(
 /// inlined. Edges are only followed to functions that may be inlined, so every cycle consists of
 /// such functions, and the edge that closes a cycle is skipped.
 fn callees_first_order(
-    policy: Policy,
+    optimize: bool,
     functions: &[CodegenedFunction],
     summaries: &[Summary],
     index: &FxHashMap<FuncId, usize>,
@@ -170,8 +161,7 @@ fn callees_first_order(
             for block in function.func.layout.blocks() {
                 for inst in function.func.layout.block_insts(block) {
                     if let Some(callee) = direct_callee(&function.func, inst, index)
-                        && policy.may_inline(&functions[callee].inline, summaries[callee])
-                        && !callees.contains(&callee)
+                        && summaries[callee].may_inline(optimize)
                     {
                         callees.push(callee);
                     }
@@ -187,7 +177,7 @@ fn callees_first_order(
     // Start at functions that are not inlined. Then a cycle is entered at a function that is
     // inlined and the call to it that closes the cycle stays.
     let roots = (0..functions.len())
-        .filter(|&idx| !policy.may_inline(&functions[idx].inline, summaries[idx]))
+        .filter(|&idx| !summaries[idx].should_inline(optimize))
         .chain(0..functions.len());
     for root in roots {
         if mem::replace(&mut visited[root], true) {
@@ -228,7 +218,7 @@ fn direct_callee(func: &Function, inst: Inst, index: &FxHashMap<FuncId, usize>) 
 }
 
 struct CallSites<'a> {
-    policy: Policy,
+    optimize: bool,
     functions: &'a [CodegenedFunction],
     index: &'a FxHashMap<FuncId, usize>,
     summaries: &'a [Summary],
@@ -258,7 +248,7 @@ impl Inline for CallSites<'_> {
         // flattened yet. Those and recursive calls stay calls.
         if callee_idx == self.caller
             || !self.processed[callee_idx]
-            || !self.policy.should_inline(&callee_fn.inline, self.summaries[callee_idx])
+            || !self.summaries[callee_idx].should_inline(self.optimize)
             || !caller.dfg.ext_funcs[callee].colocated
             || caller.dfg.signatures[callee_sig] != callee_fn.func.signature
         {
@@ -338,11 +328,10 @@ fn overlay_inlined_stack_slots(func: &mut Function, own_slots: usize, slot_range
         key: None,
     });
 
-    let mut cursor = FuncCursor::new(func);
-    while cursor.next_block().is_some() {
-        while let Some(inst) = cursor.next_inst() {
-            let InstructionData::StackAddr { stack_slot, offset, .. } =
-                &mut cursor.func.dfg.insts[inst]
+    let func = &mut func.stencil;
+    for block in func.layout.blocks() {
+        for inst in func.layout.block_insts(block) {
+            let InstructionData::StackAddr { stack_slot, offset, .. } = &mut func.dfg.insts[inst]
             else {
                 continue;
             };
@@ -358,7 +347,7 @@ fn overlay_inlined_stack_slots(func: &mut Function, own_slots: usize, slot_range
 /// of the call they replace instead of none, which would show up as the start of the function.
 fn attribute_inlined_insts_to_call_sites(func: &mut Function, own_insts: usize) {
     let func = &mut func.stencil;
-    let mut call_site = Default::default();
+    let mut call_site = RelSourceLoc::default();
     for block in func.layout.blocks() {
         for inst in func.layout.block_insts(block) {
             if inst.index() >= own_insts {

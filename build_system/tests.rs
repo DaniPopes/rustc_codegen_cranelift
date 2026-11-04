@@ -89,7 +89,12 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
     ),
     TestCase::custom("aot.inline", &|runner| {
         for opt_level in ["0", "2"] {
-            runner.run_rustc(["example/inline.rs", &format!("-Copt-level={opt_level}")]);
+            runner.run_rustc([
+                "example/inline.rs",
+                &format!("-Copt-level={opt_level}"),
+                // The MIR inliner would inline the calls first.
+                "-Zinline-mir=no",
+            ]);
             runner.run_out_command("inline", &[]);
         }
     }),
