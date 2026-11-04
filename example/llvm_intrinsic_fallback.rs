@@ -37,6 +37,7 @@ fn main() {
         test_neon_ushl();
         test_neon_fmaxnm();
         test_neon_ld4_lane();
+        test_neon_ld4_dup();
         test_neon_st1_x2();
     }
 }
@@ -122,6 +123,22 @@ unsafe fn test_avx512_mask_cmp_pd() {
     let expected = (0..8).fold(0u8, |acc, i| acc | (((a[i] < b[i]) as u8) << i)) & mask;
     assert_eq!(r, expected);
     assert_eq!(r, 0b0100_0010);
+
+    // The mask is a literal on only one of the paths, so it must not be baked into the wrapper.
+    let mut mask = 0xff;
+    if std::hint::black_box(false) {
+        mask = 0b1101_1011;
+    }
+    let r = _mm512_mask_cmp_pd_mask::<_CMP_LT_OQ>(mask, transmute(a), transmute(b));
+    assert_eq!(r, 0b0100_0010);
+    assert_eq!(
+        _mm512_mask_cmp_pd_mask::<_CMP_LT_OQ>(
+            std::hint::black_box(0x0f),
+            transmute(a),
+            transmute(b)
+        ),
+        0b0000_0010
+    );
 }
 
 // A pointer argument, a mask argument and no return value.
@@ -228,4 +245,15 @@ unsafe fn test_neon_st1_x2() {
     vst1q_s8_x2(out.as_mut_ptr(), int8x16x2_t(transmute(v0), transmute(v1)));
     assert_eq!(out[..16], v0);
     assert_eq!(out[16..], v1);
+}
+
+// A struct of vectors as the first printed type.
+#[cfg(target_arch = "aarch64")]
+unsafe fn test_neon_ld4_dup() {
+    let mem: [i8; 4] = [-1, 2, -3, 4];
+    let r = vld4q_dup_s8(mem.as_ptr());
+    let r: [[i8; 16]; 4] = transmute([r.0, r.1, r.2, r.3]);
+    for (i, lane) in r.iter().enumerate() {
+        assert_eq!(*lane, [mem[i]; 16]);
+    }
 }

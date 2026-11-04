@@ -1,5 +1,7 @@
 //! Handling of `static`s, `const`s and promoted allocations
 
+use std::mem;
+
 use cranelift_module::*;
 use rustc_const_eval::interpret::CTFE_ALLOC_SALT;
 use rustc_data_structures::fx::FxHashSet;
@@ -511,17 +513,26 @@ pub(crate) fn mir_operand_get_const_val<'tcx>(
         // inside a temporary before being passed to the intrinsic requiring the const argument.
         // This code tries to find a single constant defining definition of the referenced local.
         Operand::Copy(place) | Operand::Move(place) => {
-            if !place.projection.is_empty() {
+            if !place.projection.is_empty() || fx.mir.args_iter().any(|arg| arg == place.local) {
                 return None;
             }
             let mut computed_scalar_int = None;
+            let mut assigned = false;
             for bb_data in fx.mir.basic_blocks.iter() {
                 for stmt in &bb_data.statements {
+                    // The local could be modified through a pointer.
+                    if let StatementKind::Assign(local_and_rvalue) = &stmt.kind
+                        && let Rvalue::Ref(_, _, borrowed) | Rvalue::RawPtr(_, borrowed) =
+                            &local_and_rvalue.1
+                        && borrowed.local == place.local
+                    {
+                        return None;
+                    }
                     match &stmt.kind {
                         StatementKind::Assign(local_and_rvalue) if &local_and_rvalue.0 == place => {
                             match &local_and_rvalue.1 {
                                 Rvalue::Cast(CastKind::IntToInt, operand, ty) => {
-                                    if computed_scalar_int.is_some() {
+                                    if mem::replace(&mut assigned, true) {
                                         return None; // local assigned twice
                                     }
                                     if !matches!(ty.kind(), ty::Uint(_) | ty::Int(_)) {
@@ -544,7 +555,7 @@ pub(crate) fn mir_operand_get_const_val<'tcx>(
                                     );
                                 }
                                 Rvalue::Use(operand, _) => {
-                                    if computed_scalar_int.is_some() {
+                                    if mem::replace(&mut assigned, true) {
                                         return None; // local assigned twice
                                     }
                                     computed_scalar_int = mir_operand_get_const_val(fx, operand)

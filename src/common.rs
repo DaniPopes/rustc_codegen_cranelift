@@ -13,6 +13,7 @@ use rustc_target::spec::{Arch, HasTargetSpec, Target};
 
 use crate::constant::ConstantCx;
 use crate::debuginfo::FunctionDebugContext;
+use crate::llvm_fallback::LlvmWrappers;
 use crate::prelude::*;
 
 pub(crate) fn pointer_ty(tcx: TyCtxt<'_>) -> types::Type {
@@ -302,7 +303,7 @@ pub(crate) struct FunctionCx<'m, 'clif, 'tcx: 'm> {
 
     /// Whether `llvm.*` intrinsics without native lowering can be compiled by LLVM.
     pub(crate) llvm_fallback: bool,
-    pub(crate) llvm_wrappers: crate::llvm_fallback::LlvmWrappers,
+    pub(crate) llvm_wrappers: LlvmWrappers,
 }
 
 impl<'tcx> LayoutOfHelpers<'tcx> for FunctionCx<'_, '_, 'tcx> {

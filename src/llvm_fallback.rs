@@ -71,9 +71,15 @@ impl<'tcx> TypePrinter<'tcx> {
                 if let Some(name) = self.structs.get(&ty) {
                     return Some(name.clone());
                 }
+                let repr = adt.repr();
+                if repr.packed() || repr.align.is_some() {
+                    return None;
+                }
                 let name = format!("T{}", self.structs.len());
+                // Reserve the name before printing the fields, which may be structs too.
+                self.structs.insert(ty, name.clone());
                 let mut decl = String::new();
-                if adt.repr().simd() {
+                if repr.simd() {
                     let (lane_count, lane_ty) = ty.simd_size_and_type(self.tcx);
                     if !matches!(lane_ty.kind(), ty::Int(_) | ty::Uint(_) | ty::Float(_)) {
                         return None;
@@ -82,13 +88,7 @@ impl<'tcx> TypePrinter<'tcx> {
                     writeln!(decl, "#[repr(simd)] pub struct {name}([{lane_ty}; {lane_count}]);")
                         .unwrap();
                 } else {
-                    let repr = adt.repr();
-                    if !adt.is_struct()
-                        || repr.packed()
-                        || repr.transparent()
-                        || repr.align.is_some()
-                        || repr.scalable.is_some()
-                    {
+                    if !adt.is_struct() || repr.transparent() || repr.scalable.is_some() {
                         return None;
                     }
                     if repr.c() {
@@ -106,7 +106,6 @@ impl<'tcx> TypePrinter<'tcx> {
                 }
                 writeln!(decl, "impl Copy for {name} {{}}").unwrap();
                 self.decls.push_str(&decl);
-                self.structs.insert(ty, name.clone());
                 name
             }
             _ => return None,
@@ -123,7 +122,20 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
     args: &[Spanned<mir::Operand<'tcx>>],
     ret: CPlace<'tcx>,
 ) -> bool {
-    if !fx.llvm_fallback {
+    // These depend on the frame or the state of the function that calls them.
+    const FRAME_DEPENDENT: &[&str] = &[
+        "llvm.eh.",
+        "llvm.frameaddress",
+        "llvm.read_register",
+        "llvm.returnaddress",
+        "llvm.sponentry",
+        "llvm.stackrestore",
+        "llvm.stacksave",
+        "llvm.va_",
+        "llvm.write_register",
+        "llvm.x86.xbegin",
+    ];
+    if !fx.llvm_fallback || FRAME_DEPENDENT.iter().any(|prefix| intrinsic.starts_with(prefix)) {
         return false;
     }
 
@@ -137,65 +149,44 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
         let Some(arg_ty_str) = printer.print(arg_ty) else { return false };
         write!(params, "a{i}: {arg_ty_str}, ").unwrap();
 
-        let const_val = match arg_ty.kind() {
-            ty::Int(_) | ty::Uint(_) => crate::constant::mir_operand_get_const_val(fx, &arg.node),
+        let const_val = crate::constant::mir_operand_get_const_val(fx, &arg.node);
+        let literal = match (arg_ty.kind(), const_val) {
+            (ty::Int(_), Some(val)) => Some(format!("{}_{arg_ty_str}", val.to_int(val.size()))),
+            (ty::Uint(_), Some(val)) => Some(format!("{}_{arg_ty_str}", val.to_uint(val.size()))),
+            (ty::Bool, Some(val)) => Some(val.try_to_bool().unwrap().to_string()),
             _ => None,
         };
-        if let Some(const_val) = const_val {
-            let size = const_val.size();
-            match arg_ty.kind() {
-                ty::Int(_) => write!(call_args, "{}_{arg_ty_str}, ", const_val.to_int(size)),
-                _ => write!(call_args, "{}_{arg_ty_str}, ", const_val.to_uint(size)),
-            }
-            .unwrap();
+        if let Some(literal) = literal {
+            write!(call_args, "{literal}, ").unwrap();
         } else {
             write!(wrapper_params, "p{i}: *const {arg_ty_str}, ").unwrap();
             write!(call_args, "*p{i}, ").unwrap();
             by_ptr_args.push(i);
         }
     }
-
-    let ret_ty_str = if ret.layout().ty.is_unit() {
-        None
-    } else {
-        let Some(ret_ty_str) = printer.print(ret.layout().ty) else { return false };
-        Some(ret_ty_str)
-    };
+    let Some(ret_ty_str) = printer.print(ret.layout().ty) else { return false };
 
     let (target_features, feature_gates) = enclosing_target_features(fx);
 
-    let mut body = String::new();
-    writeln!(body, "use super::Copy;").unwrap();
-    body.push_str(&printer.decls);
-    writeln!(body, "unsafe extern \"llvm-intrinsic\" {{").unwrap();
-    write!(body, "    #[link_name = \"{intrinsic}\"]\n    fn f({params})").unwrap();
-    if let Some(ret_ty_str) = &ret_ty_str {
-        write!(body, " -> {ret_ty_str}").unwrap();
-    }
-    writeln!(body, ";\n}}").unwrap();
-    writeln!(body, "#[unsafe(no_mangle)]").unwrap();
+    let mut header = String::from("use super::Copy;\n");
+    header.push_str(&printer.decls);
+    writeln!(
+        header,
+        "unsafe extern \"llvm-intrinsic\" {{\n    \
+             #[link_name = \"{intrinsic}\"]\n    \
+             fn f({params}) -> {ret_ty_str};\n}}"
+    )
+    .unwrap();
     if !target_features.is_empty() {
-        writeln!(body, "#[target_feature(enable = \"{target_features}\")]").unwrap();
+        writeln!(header, "#[target_feature(enable = \"{target_features}\")]").unwrap();
     }
-    if let Some(ret_ty_str) = &ret_ty_str {
-        write!(wrapper_params, "ret: *mut {ret_ty_str}").unwrap();
-        writeln!(
-            body,
-            "pub unsafe extern \"C\" fn WRAPPER({wrapper_params}) {{ *ret = f({call_args}); }}"
-        )
-        .unwrap();
-    } else {
-        writeln!(
-            body,
-            "pub unsafe extern \"C\" fn WRAPPER({wrapper_params}) {{ f({call_args}); }}"
-        )
-        .unwrap();
-    }
+    let wrapper_fn =
+        format!("({wrapper_params}ret: *mut {ret_ty_str}) {{ *ret = f({call_args}); }}");
 
     // The name only depends on the codegen unit and the wrapper itself, which deduplicates
     // wrappers within the codegen unit.
     let mut hasher = DefaultHasher::new();
-    body.hash(&mut hasher);
+    (fx.cgu_name.as_str(), &header, &wrapper_fn).hash(&mut hasher);
     let wrapper_name = format!(
         "__llvm_intrinsic_{}_{}_{:016x}",
         fx.cgu_name.as_str().replace('.', "__").replace('-', "_"),
@@ -203,8 +194,11 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
         hasher.finish(),
     );
     if !fx.llvm_wrappers.contains_key(&wrapper_name) {
-        let body = body.replace("WRAPPER", &wrapper_name);
-        let source = format!("mod {wrapper_name}_mod {{\n{body}}}\n");
+        let source = format!(
+            "mod {wrapper_name}_mod {{\n{header}\
+             #[unsafe(no_mangle)]\n\
+             pub unsafe extern \"C\" fn {wrapper_name}{wrapper_fn}\n}}\n"
+        );
         fx.llvm_wrappers.insert(wrapper_name.clone(), LlvmWrapper { source, feature_gates });
     }
 
@@ -216,10 +210,8 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
         slot.write_cvalue(fx, arg);
         wrapper_args.push(slot.to_ptr().get_addr(fx));
     }
-    let ret_slot = ret_ty_str.is_some().then(|| CPlace::new_stack_slot(fx, ret.layout()));
-    if let Some(ret_slot) = ret_slot {
-        wrapper_args.push(ret_slot.to_ptr().get_addr(fx));
-    }
+    let ret_slot = CPlace::new_stack_slot(fx, ret.layout());
+    wrapper_args.push(ret_slot.to_ptr().get_addr(fx));
 
     let sig = Signature {
         call_conv: fx.target_config.default_call_conv,
@@ -233,10 +225,8 @@ pub(crate) fn codegen_llvm_fallback_call<'tcx>(
     }
     fx.bcx.ins().call(func_ref, &wrapper_args);
 
-    if let Some(ret_slot) = ret_slot {
-        let value = ret_slot.to_cvalue(fx);
-        ret.write_cvalue(fx, value);
-    }
+    let value = ret_slot.to_cvalue(fx);
+    ret.write_cvalue(fx, value);
 
     true
 }
@@ -255,6 +245,9 @@ fn enclosing_target_features(fx: &FunctionCx<'_, '_, '_>) -> (String, Vec<String
             continue;
         };
         if stability.toggle_allowed().is_err() {
+            continue;
+        }
+        if features.split(',').any(|feature| feature == name) {
             continue;
         }
         if !features.is_empty() {

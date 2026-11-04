@@ -260,6 +260,7 @@ pub(crate) fn compile_global_asm(
     global_asm_object_file: &Path,
 ) -> Result<(), String> {
     assert!(!global_asm.is_empty() || !llvm_wrappers.is_empty());
+    let has_global_asm = !global_asm.is_empty();
 
     // Remove all LLVM style comments
     let mut global_asm = global_asm
@@ -271,8 +272,6 @@ pub(crate) fn compile_global_asm(
 
     // Assemble `global_asm`
     if !SUBPROCESS_AVAILABLE {
-        assert!(llvm_wrappers.is_empty());
-
         let mut child = Command::new(&config.assembler)
             .arg("-o")
             .arg(&global_asm_object_file)
@@ -287,24 +286,20 @@ pub(crate) fn compile_global_asm(
     } else {
         let mut source = String::new();
 
-        let mut feature_gates = FxIndexSet::default();
-        feature_gates.extend(
-            [
-                "decl_macro",
-                "no_core",
-                "rustc_attrs",
-                "f16",
-                "f128",
-                "lang_items",
+        let mut feature_gates = FxIndexSet::from_iter(["decl_macro", "no_core", "rustc_attrs"]);
+        if !llvm_wrappers.is_empty() {
+            feature_gates.extend([
                 "auto_traits",
+                "f128",
+                "f16",
+                "lang_items",
+                "link_llvm_intrinsics",
                 "repr_simd",
                 "simd_ffi",
-                "link_llvm_intrinsics",
-            ]
-            .map(str::to_owned),
-        );
+            ]);
+        }
         for wrapper in llvm_wrappers.values() {
-            feature_gates.extend(wrapper.feature_gates.iter().cloned());
+            feature_gates.extend(wrapper.feature_gates.iter().map(String::as_str));
         }
         let feature_gates = feature_gates.into_iter().collect::<Vec<_>>().join(", ");
         writeln!(source, "#![feature({feature_gates})]").unwrap();
@@ -313,9 +308,11 @@ pub(crate) fn compile_global_asm(
              #![allow(improper_ctypes, improper_ctypes_definitions)]\n\
              #![no_core]\n",
         );
-        source.push_str(NO_CORE_PRELUDE);
+        if !llvm_wrappers.is_empty() {
+            source.push_str(NO_CORE_PRELUDE);
+        }
 
-        if !global_asm.is_empty() {
+        if has_global_asm {
             // Escape { and }
             let global_asm = global_asm.replace('{', "{{").replace('}', "}}");
 
@@ -373,7 +370,8 @@ pub(crate) fn compile_global_asm(
             .stderr(Stdio::piped())
             .spawn()
             .expect("Failed to spawn `as`.");
-        child.stdin.take().unwrap().write_all(source.as_bytes()).unwrap();
+        // If the subprocess exits early the error is in its stderr.
+        let _ = child.stdin.take().unwrap().write_all(source.as_bytes());
         let output = child.wait_with_output().expect("Failed to wait for `as`.");
         if !output.status.success() {
             return Err(format!(
