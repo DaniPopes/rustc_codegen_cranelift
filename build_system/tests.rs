@@ -159,6 +159,7 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
                     &["-Ctarget-cpu=x86-64-v3", "-Ctarget-feature=-avx2"],
                 ),
                 ("znver5", &["-Ctarget-cpu=znver5"]),
+                ("native", &["-Ctarget-cpu=native"]),
             ]
         } else if runner.target_compiler.target.starts_with("aarch64") {
             &[("apple_m1", &["-Ctarget-cpu=apple-m1"])]
