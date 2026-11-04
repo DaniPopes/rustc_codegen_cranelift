@@ -630,7 +630,9 @@ pub(crate) fn codegen_terminator_call<'tcx>(
             with_no_trimmed_paths!(fx.add_post_comment(nop_inst, format!("abi: {:?}", fn_abi)));
         }
 
-        codegen_call_with_unwind_action(fx, source_info.span, func_ref, unwind, &call_args, None)
+        // Like cg_ssa, attribute the call itself to `fn_span` rather than to the whole terminator.
+        fx.set_debug_loc(source_info);
+        codegen_call_with_unwind_action(fx, func_ref, unwind, &call_args, None)
     });
 
     if let Some(dest) = target {
@@ -788,7 +790,6 @@ pub(crate) fn codegen_drop<'tcx>(
                 let sig = fx.bcx.import_signature(sig);
                 codegen_call_with_unwind_action(
                     fx,
-                    source_info.span,
                     CallTarget::Indirect(sig, drop_fn),
                     unwind,
                     &[ptr],
@@ -823,7 +824,6 @@ pub(crate) fn codegen_drop<'tcx>(
                 let func_ref = fx.get_function_ref(drop_instance);
                 codegen_call_with_unwind_action(
                     fx,
-                    source_info.span,
                     CallTarget::Direct(func_ref),
                     unwind,
                     &call_args,
@@ -842,7 +842,6 @@ pub(crate) enum CallTarget {
 
 pub(crate) fn codegen_call_with_unwind_action(
     fx: &mut FunctionCx<'_, '_, '_>,
-    span: Span,
     func_ref: CallTarget,
     mut unwind: UnwindAction,
     call_args: &[Value],
@@ -937,7 +936,11 @@ pub(crate) fn codegen_call_with_unwind_action(
                     // FIXME dedup terminate blocks
                     fx.bcx.append_block_param(pre_cleanup_block, fx.pointer_type);
 
-                    codegen_unwind_terminate(fx, span, reason);
+                    // Like cg_ssa, attribute the terminate block to the function.
+                    let srcloc = fx.bcx.srcloc();
+                    fx.set_debug_loc(mir::SourceInfo::outermost(fx.mir.span));
+                    codegen_unwind_terminate(fx, fx.mir.span, reason);
+                    fx.bcx.set_srcloc(srcloc);
                 }
             }
 
