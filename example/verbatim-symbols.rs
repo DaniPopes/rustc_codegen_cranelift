@@ -16,9 +16,9 @@ macro_rules! externs {
 }
 
 // Targets that add a global prefix to symbol names need it spelled out in a verbatim name.
-#[cfg(any(target_vendor = "apple", all(windows, target_arch = "x86")))]
+#[cfg(target_vendor = "apple")]
 externs!("\u{1}_strlen", "\u{1}_verbatim_function", "\u{1}_VERBATIM_DATA");
-#[cfg(not(any(target_vendor = "apple", all(windows, target_arch = "x86"))))]
+#[cfg(not(target_vendor = "apple"))]
 externs!("\u{1}strlen", "\u{1}verbatim_function", "\u{1}VERBATIM_DATA");
 
 unsafe extern "C" {
