@@ -313,7 +313,7 @@ fn codegen_fn_body(fx: &mut FunctionCx<'_, '_, '_>, start_block: Block) {
         }
 
         if bb_data.is_cleanup {
-            if cfg!(not(feature = "unwinding")) {
+            if !crate::debuginfo::unwinding_enabled(fx.tcx.sess) {
                 continue;
             }
 
@@ -574,7 +574,7 @@ fn codegen_fn_body(fx: &mut FunctionCx<'_, '_, '_>, start_block: Block) {
                 codegen_unwind_terminate(fx, source_info.span, *reason);
             }
             TerminatorKind::UnwindResume => {
-                if cfg!(feature = "unwinding") {
+                if crate::debuginfo::unwinding_enabled(fx.tcx.sess) {
                     let exception_ptr = fx.bcx.use_var(fx.exception_slot);
                     fx.lib_call(
                         "_Unwind_Resume",

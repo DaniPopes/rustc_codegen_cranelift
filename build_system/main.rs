@@ -49,6 +49,12 @@ enum CodegenBackend {
     Builtin(String),
 }
 
+/// Mirrors `unwinding_enabled` in `src/debuginfo/unwind.rs`.
+fn supports_panic_unwind(target: &str) -> bool {
+    (target.starts_with("x86_64-") || target.starts_with("aarch64-"))
+        && !["windows", "cygwin", "apple", "uefi"].iter().any(|os| target.contains(os))
+}
+
 fn main() {
     if env::var_os("RUST_BACKTRACE").is_none() {
         env::set_var("RUST_BACKTRACE", "1");
@@ -77,6 +83,7 @@ fn main() {
         panic_unwind_support: false,
         keep_sysroot: false,
     };
+    let mut panic_unwind_support = None;
     let mut use_unstable_features = true;
     let mut frozen = false;
     let mut skip_tests = vec![];
@@ -104,7 +111,8 @@ fn main() {
             }
             "--keep-sysroot" => sysroot_config.keep_sysroot = true,
             "--no-unstable-features" => use_unstable_features = false,
-            "--panic-unwind-support" => sysroot_config.panic_unwind_support = true,
+            "--panic-unwind-support" => panic_unwind_support = Some(true),
+            "--no-panic-unwind-support" => panic_unwind_support = Some(false),
             "--frozen" => frozen = true,
             "--skip-test" => {
                 // FIXME check that all passed in tests actually exist
@@ -172,6 +180,12 @@ fn main() {
     let target_tuple =
         std::env::var("TARGET_TUPLE").unwrap_or_else(|_| bootstrap_host_compiler.target.clone());
 
+    if panic_unwind_support == Some(true) && !supports_panic_unwind(&target_tuple) {
+        arg_error!("--panic-unwind-support is not supported for target {}", target_tuple);
+    }
+    sysroot_config.panic_unwind_support =
+        panic_unwind_support.unwrap_or_else(|| supports_panic_unwind(&target_tuple));
+
     let dirs = path::Dirs {
         source_dir: current_dir.clone(),
         download_dir: download_dir
@@ -202,7 +216,6 @@ fn main() {
             &dirs,
             &bootstrap_host_compiler,
             use_unstable_features,
-            sysroot_config.panic_unwind_support,
         ))
     };
     match command {

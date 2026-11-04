@@ -857,7 +857,7 @@ pub(crate) fn codegen_call_with_unwind_action(
         assert!(fx.bcx.func.dfg.signatures[sig_ref].returns.is_empty());
     }
 
-    if cfg!(not(feature = "unwinding")) {
+    if !crate::debuginfo::unwinding_enabled(fx.tcx.sess) {
         unwind = UnwindAction::Unreachable;
     }
 

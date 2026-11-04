@@ -146,6 +146,11 @@ jobs:
         TARGET_TUPLE: ${{ matrix.env.TARGET_TUPLE }}
       run: ./y.sh test --sysroot llvm --no-unstable-features ${TEST_ARGS}
 
+    # Unwinding is enabled by default where supported. Keep testing the -Cpanic=abort path.
+    - name: Test without unwinding
+      if: matrix.env.TARGET_TUPLE == 'x86_64-unknown-linux-gnu'
+      run: ./y.sh test --no-panic-unwind-support --skip-test testsuite.extended_sysroot
+
 
   # This job doesn't use cg_clif in any way. It checks that all cg_clif tests work with cg_llvm too.
   test_llvm:

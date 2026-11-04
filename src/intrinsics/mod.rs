@@ -25,7 +25,6 @@ use rustc_middle::ty::GenericArgs;
 use rustc_middle::ty::layout::{HasTypingEnv as _, ValidityRequirement};
 use rustc_middle::ty::print::{with_no_trimmed_paths, with_no_visible_paths};
 use rustc_span::{Spanned, Symbol, sym};
-use rustc_target::spec::PanicStrategy;
 
 pub(crate) use self::llvm::codegen_llvm_intrinsic_call;
 use crate::cast::clif_intcast;
@@ -1435,9 +1434,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
                 returns: vec![],
             });
 
-            if cfg!(not(feature = "unwinding"))
-                || fx.tcx.sess.panic_strategy() == PanicStrategy::Abort
-            {
+            if !crate::debuginfo::unwinding_enabled(fx.tcx.sess) {
                 fx.bcx.ins().call_indirect(f_sig, f, &[data]);
 
                 let layout = fx.layout_of(fx.tcx.types.bool);

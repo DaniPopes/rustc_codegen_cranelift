@@ -104,7 +104,7 @@ See [rustc_testing.md](docs/rustc_testing.md).
 ## Not yet supported
 
 * SIMD ([tracked here](https://github.com/rust-lang/rustc_codegen_cranelift/issues/171), `std::simd` fully works, `std::arch` is partially supported)
-* Unwinding on panics ([experimental and not supported on Windows and macOS](https://github.com/rust-lang/rustc_codegen_cranelift/issues/1567), `-Cpanic=abort` is enabled by default)
+* Unwinding on panics on targets other than x86_64 and aarch64 ELF targets, such as Windows and macOS (`-Cpanic=abort` is enabled by default on these targets)
 
 ## License
 
