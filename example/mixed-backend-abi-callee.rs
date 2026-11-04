@@ -26,9 +26,9 @@ macro_rules! define_abi {
             #[derive(Clone, Copy)]
             pub struct Narrow(pub u64, pub u128);
 
-            #[derive(Clone, Copy)]
-            #[repr(align(16))]
             $(#[$repr])*
+            #[repr(align(16))]
+            #[derive(Clone, Copy)]
             pub struct Align16(pub u64, pub u64);
             $(#[$repr])*
             #[derive(Clone, Copy)]
