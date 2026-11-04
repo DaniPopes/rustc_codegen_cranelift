@@ -179,7 +179,7 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
                 if callee == "llvm" {
                     cmd.args(["--cfg", "variadic"]);
                     // Cranelift can't call variadic functions with float arguments on x86_64.
-                    if caller == "llvm" || runner.target_compiler.target.starts_with("aarch64") {
+                    if caller == "llvm" || target.starts_with("aarch64") {
                         cmd.args(["--cfg", "variadic_float"]);
                     }
                 }
@@ -193,35 +193,29 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             );
             rustc(caller, &["--cfg", "caller", "--crate-name", "abi_caller"]);
 
-            {
-                let mut cmd = runner.target_compiler.run_with_runner(out_dir.join("abi_caller"));
-                let output = cmd.output().unwrap();
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                eprint!("{stderr}");
+            let mut cmd = runner.target_compiler.run_with_runner(out_dir.join("abi_caller"));
+            let output = cmd.output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprint!("{stderr}");
 
-                // Every mismatch is reported as `<case>: <details>`.
-                let mismatches: BTreeSet<_> = stderr
-                    .lines()
-                    .filter_map(|line| line.split_once(": "))
-                    .map(|(case, _)| case.to_owned())
-                    .collect();
-                let busted = busted_abi_conformance_cases(
-                    &runner.dirs,
-                    &runner.target_compiler.target,
-                    &format!("{callee}_{caller}"),
+            // Every mismatch is reported as `<case>: <details>`, followed by their count.
+            let mismatches: BTreeSet<_> = stderr
+                .lines()
+                .filter_map(|line| line.split_once(": "))
+                .map(|(case, _)| case.to_owned())
+                .collect();
+            let busted = busted_abi_conformance_cases(&runner.dirs, target, callee, caller);
+            let unexpected: Vec<_> = mismatches.difference(&busted).collect();
+            let fixed: Vec<_> = busted.difference(&mismatches).collect();
+            // A crash is not a mismatch, and would hide the cases that did not run.
+            let completed = output.status.success() || stderr.contains(" ABI mismatches");
+            if !unexpected.is_empty() || !fixed.is_empty() || !completed {
+                eprintln!(
+                    "abi-conformance: unexpected mismatches: {unexpected:?}, cases in \
+                     scripts/abi-conformance-busted.txt that now pass: {fixed:?}, completed: \
+                     {completed}"
                 );
-                let unexpected: Vec<_> = mismatches.difference(&busted).collect();
-                let fixed: Vec<_> = busted.difference(&mismatches).collect();
-                if !unexpected.is_empty()
-                    || !fixed.is_empty()
-                    || (!output.status.success() && mismatches.is_empty())
-                {
-                    eprintln!(
-                        "abi-conformance: unexpected mismatches: {unexpected:?}, \
-                         cases in scripts/abi-conformance-busted.txt that now pass: {fixed:?}"
-                    );
-                    failed = true;
-                }
+                failed = true;
             }
         }
         if failed {
@@ -614,19 +608,28 @@ pub(crate) fn run_tests(
 }
 
 /// The cases of `example/abi-conformance.rs` that are known to mismatch for a target and a
-/// callee and caller backend pair.
-fn busted_abi_conformance_cases(dirs: &Dirs, target: &str, backends: &str) -> BTreeSet<String> {
+/// callee and caller backend pair. `mixed` in the file stands for both directions between backends.
+fn busted_abi_conformance_cases(
+    dirs: &Dirs,
+    target: &str,
+    callee: &str,
+    caller: &str,
+) -> BTreeSet<String> {
     let busted = fs::read_to_string(dirs.source_dir.join("scripts/abi-conformance-busted.txt"));
     busted
         .unwrap()
         .lines()
         .filter(|line| !line.starts_with('#') && !line.is_empty())
         .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            let (target_prefix, line_backends, case) =
-                (parts.next()?, parts.next()?, parts.next()?);
-            (target.starts_with(target_prefix) && line_backends == backends)
-                .then(|| case.to_owned())
+            let &[target_prefix, backends, case] = &*line.split_whitespace().collect::<Vec<_>>()
+            else {
+                panic!("malformed line in abi-conformance-busted.txt: {line}");
+            };
+            let applies = match backends {
+                "mixed" => callee != caller,
+                backends => backends == format!("{callee}_{caller}"),
+            };
+            (applies && target.starts_with(target_prefix)).then(|| case.to_owned())
         })
         .collect()
 }

@@ -167,16 +167,16 @@ fn exhaust(test: &mut Test<'_>, probe: &str) {
     // Both register classes run out at once, with either class first.
     for ints in 4..=MAX_FILL {
         for floats in [7, 8, MAX_FILL] {
-            let ints_first = concat(&[&vec!["u64"; ints], &vec!["f64"; floats]]);
-            let floats_first = concat(&[&vec!["f64"; floats], &vec!["u64"; ints]]);
+            let ints = vec!["u64"; ints];
+            let floats = vec!["f64"; floats];
             test.func(
-                &format!("ints{ints}_floats{floats}"),
-                &concat(&[&ints_first, &[probe, "u64", "f64"]]),
+                &format!("ints{}_floats{}", ints.len(), floats.len()),
+                &concat(&[&ints, &floats, &[probe, "u64", "f64"]]),
                 None,
             );
             test.func(
-                &format!("floats{floats}_ints{ints}"),
-                &concat(&[&floats_first, &[probe, "f64", "u64"]]),
+                &format!("floats{}_ints{}", floats.len(), ints.len()),
+                &concat(&[&floats, &ints, &[probe, "f64", "u64"]]),
                 None,
             );
         }

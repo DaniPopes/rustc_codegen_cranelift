@@ -706,14 +706,22 @@ pub(crate) fn codegen_terminator_call<'tcx>(
                     variadic_start += 8 - integer_registers_used;
                 }
 
-                // Variadic floats are passed in the same 8-byte stack slots as integers, so
-                // pass them as integers to ensure they don't end up in a vector register.
+                // Variadic arguments are passed in 8-byte stack slots, while Cranelift only gives
+                // them as many bytes as their type has. Widen them to fill the slot, passing
+                // floats as integers to also ensure they don't end up in a vector register.
                 for (param, arg) in
                     abi_params[variadic_start..].iter_mut().zip(&mut call_args[variadic_start..])
                 {
-                    if param.value_type == types::F64 {
-                        param.value_type = types::I64;
-                        *arg = codegen_bitcast(fx, types::I64, *arg);
+                    match param.value_type {
+                        types::F64 => {
+                            param.value_type = types::I64;
+                            *arg = codegen_bitcast(fx, types::I64, *arg);
+                        }
+                        types::I8 | types::I16 | types::I32 => {
+                            param.value_type = types::I64;
+                            *arg = fx.bcx.ins().uextend(types::I64, *arg);
+                        }
+                        _ => {}
                     }
                 }
             }
