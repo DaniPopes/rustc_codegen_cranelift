@@ -364,6 +364,11 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
         clif_pair_type_from_ty(self.tcx, ty)
     }
 
+    /// Whether Cranelift supports loading, storing and operating on 128-bit vectors on the target.
+    pub(crate) fn has_clif_simd(&self) -> bool {
+        matches!(self.tcx.sess.target.arch, Arch::X86_64 | Arch::AArch64)
+    }
+
     pub(crate) fn get_block(&self, bb: BasicBlock) -> Block {
         *self.block_map.get(bb).unwrap()
     }
