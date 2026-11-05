@@ -1062,18 +1062,26 @@ fn test_simd_ops() {
     let u32_array = bb([1u32, 0x8000_0002, 3, 0x4000_0004]);
     let from_array = u32x4::from_array(u32_array);
     t!(from_array, "[1, 2147483650, 3, 1073741828]");
+    // Byte order dependent.
+    #[cfg(target_endian = "little")]
     t!(
         unsafe { std::mem::transmute::<u32x4, u8x16>(bb(u32a)) },
         "[0, 0, 0, 0, 0, 0, 0, 128, 255, 255, 255, 255, 21, 205, 91, 7]"
     );
+    // Byte order dependent.
+    #[cfg(target_endian = "little")]
     t!(
         unsafe { std::mem::transmute::<u8x16, u64x2>(bb(u8a)) },
         "[14447970362580926720, 867798387104677882]"
     );
+    // Byte order dependent.
+    #[cfg(target_endian = "little")]
     t!(
         unsafe { std::mem::transmute::<i16x8, f32x4>(bb(i16a)) }.to_bits(),
         "[65536, 2147516415, 65601535, 232144]"
     );
+    // Byte order dependent.
+    #[cfg(target_endian = "little")]
     t!(
         unsafe { std::mem::transmute::<f64x2, [u32; 4]>(bb(f64a)) },
         "[0, 2147483648, 2281731484, 2117592124]"
@@ -1151,6 +1159,8 @@ fn test_simd_ops() {
         u64x8::splat(bb(0x0102_0304_0506_0708)),
         "[72623859790382856, 72623859790382856, 72623859790382856, 72623859790382856, 72623859790382856, 72623859790382856, 72623859790382856, 72623859790382856]"
     );
+    // Byte order dependent.
+    #[cfg(target_endian = "little")]
     t!(
         unsafe { std::mem::transmute::<u32x8, [u8; 32]>(u32x8a) },
         "[0, 0, 0, 0, 0, 0, 0, 128, 255, 255, 255, 255, 21, 205, 91, 7, 5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0, 255, 255, 255, 127]"
