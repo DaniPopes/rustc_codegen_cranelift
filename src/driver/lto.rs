@@ -5,7 +5,6 @@
 //! expects them to be part of the LTO output. Thin LTO re-emits each upstream object file
 //! unchanged. Fat LTO additionally merges all object files into a single relocatable object.
 
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ffi::CString;
 use std::fs::{self, File};
@@ -236,11 +235,9 @@ fn write_module(
     buffer: &ModuleBuffer,
 ) -> CompiledModule {
     let (object, global_asm_object) = buffer.split();
-    let object =
-        if cgcx.is_pe_coff { remove_embedded_bitcode(object) } else { Cow::Borrowed(object) };
 
     let object_path = cgcx.output_filenames.temp_path_ext_for_cgu(&format!("{prefix}o"), name);
-    write_file(dcx, &object_path, &object);
+    write_file(dcx, &object_path, object);
 
     let global_asm_object_path = (!global_asm_object.is_empty()).then(|| {
         let path = cgcx.output_filenames.temp_path_ext_for_cgu(&format!("{prefix}asm.o"), name);
@@ -258,34 +255,6 @@ fn write_module(
         assembly: None,
         llvm_ir: None,
     }
-}
-
-/// Marks the sections with embedded LLVM bitcode of a COFF object as removable. GNU ld places them
-/// in the image of the executable, which makes it invalid.
-fn remove_embedded_bitcode(object: &[u8]) -> Cow<'_, [u8]> {
-    const SECTION_HEADER_SIZE: usize = 40;
-    const IMAGE_SCN_LNK_REMOVE: u32 = 0x800;
-
-    let u16_at = |data: &[u8], offset: usize| {
-        data.get(offset..offset + 2).map(|bytes| u16::from_le_bytes(bytes.try_into().unwrap()))
-    };
-    let (Some(num_sections), Some(optional_header_size)) = (u16_at(object, 2), u16_at(object, 16))
-    else {
-        return Cow::Borrowed(object);
-    };
-
-    let mut object = Cow::Borrowed(object);
-    for index in 0..usize::from(num_sections) {
-        let header = 20 + usize::from(optional_header_size) + index * SECTION_HEADER_SIZE;
-        let Some(section) = object.get(header..header + SECTION_HEADER_SIZE) else { break };
-        if section.starts_with(b".llvmbc\0") {
-            let characteristics = header + 36;
-            let flags = u32::from_le_bytes(object[characteristics..][..4].try_into().unwrap());
-            object.to_mut()[characteristics..][..4]
-                .copy_from_slice(&(flags | IMAGE_SCN_LNK_REMOVE).to_le_bytes());
-        }
-    }
-    object
 }
 
 fn write_file(dcx: DiagCtxtHandle<'_>, path: &Path, data: &[u8]) {
