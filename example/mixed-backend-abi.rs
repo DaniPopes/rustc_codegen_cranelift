@@ -66,6 +66,9 @@ macro_rules! check_abi {
             seven_ints_narrow_int(a, b, c, d, e, f, g, n, 13),
             mix(&[a, b, c, d, e, f, g, 12 ^ fold(y), 13])
         );
+        // An aarch64 aggregate that goes on the stack must not be split between the last register
+        // and the stack, which Cranelift only avoids with argument groups.
+        #[cfg(not(target_arch = "aarch64"))]
         check!(
             $module,
             seven_ints_align16_int(a, b, c, d, e, f, g, a16, 13),
