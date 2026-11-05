@@ -5,7 +5,7 @@ use std::hint::black_box;
 use std::marker::PhantomData;
 
 // A chain of `#[inline(always)]` functions inside a recursive cycle. Every call of `Rec::call` goes
-// through 64 wrappers. Without inlining each wrapper has a frame of its own.
+// through 128 wrappers. Without inlining each wrapper has a frame of its own.
 
 trait Chain {
     fn call(n: u64) -> u64;
@@ -23,17 +23,18 @@ impl<T: Chain> Chain for Wrap<T> {
 type Wrap4<T> = Wrap<Wrap<Wrap<Wrap<T>>>>;
 type Wrap16<T> = Wrap4<Wrap4<Wrap4<Wrap4<T>>>>;
 type Wrap64<T> = Wrap16<Wrap16<Wrap16<Wrap16<T>>>>;
+type Wrap128<T> = Wrap64<Wrap64<T>>;
 
 struct Rec;
 
 impl Chain for Rec {
     fn call(n: u64) -> u64 {
-        if n == 0 { 0 } else { Wrap64::<Rec>::call(n - 1) }
+        if n == 0 { 0 } else { Wrap128::<Rec>::call(n - 1) }
     }
 }
 
 const CHAIN_DEPTH: u64 = 1000;
-const CHAIN_STACK_SIZE: usize = 256 * 1024;
+const CHAIN_STACK_SIZE: usize = 1024 * 1024;
 
 fn run_with_stack_size<R: Send + 'static>(
     stack_size: usize,
@@ -43,8 +44,8 @@ fn run_with_stack_size<R: Send + 'static>(
 }
 
 fn inline_always_chain_in_recursion() {
-    let result = run_with_stack_size(CHAIN_STACK_SIZE, || Wrap64::<Rec>::call(CHAIN_DEPTH));
-    assert_eq!(result, 64 * (CHAIN_DEPTH + 1));
+    let result = run_with_stack_size(CHAIN_STACK_SIZE, || Wrap128::<Rec>::call(CHAIN_DEPTH));
+    assert_eq!(result, 128 * (CHAIN_DEPTH + 1));
 }
 
 // Callees called in sequence from the same function. Their stack slots are never live at the same
