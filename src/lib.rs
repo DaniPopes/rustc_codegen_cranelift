@@ -13,6 +13,7 @@
 extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_attr_ir;
+#[cfg(feature = "llvm")]
 extern crate rustc_codegen_llvm;
 extern crate rustc_codegen_ssa;
 extern crate rustc_const_eval;
@@ -39,6 +40,7 @@ use std::sync::Arc;
 
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::settings::{self, Configurable};
+#[cfg(feature = "llvm")]
 use rustc_codegen_llvm::LlvmCodegenBackend;
 use rustc_codegen_ssa::traits::CodegenBackend;
 use rustc_codegen_ssa::{CompiledModules, CrateInfo, TargetConfig, back};
@@ -125,6 +127,7 @@ pub struct CraneliftCodegenBackend {
     pub config: Option<BackendConfig>,
     /// Used to report the same target features as the LLVM backend would. Its `init` is run by our
     /// own `init`.
+    #[cfg(feature = "llvm")]
     llvm: Box<dyn CodegenBackend>,
 }
 
@@ -159,6 +162,7 @@ impl CodegenBackend for CraneliftCodegenBackend {
         }
 
         // LLVM's `init` configures LLVM using `-Cllvm-args`, which it fails on for `jit-mode`.
+        #[cfg(feature = "llvm")]
         if !config.jit_mode {
             self.llvm.init(sess);
         }
@@ -173,11 +177,14 @@ impl CodegenBackend for CraneliftCodegenBackend {
     }
 
     fn target_config(&self, sess: &EarlySession) -> TargetConfig {
+        #[cfg(feature = "llvm")]
         let mut target_config = if self.config.as_ref().is_some_and(|config| config.jit_mode) {
             fixed_target_config(sess)
         } else {
             self.llvm.target_config(sess)
         };
+        #[cfg(not(feature = "llvm"))]
+        let mut target_config = fixed_target_config(sess);
 
         // FIXME(f16_f128): `rustc_codegen_llvm` currently disables support on Windows GNU
         // targets due to GCC using a different ABI than LLVM. Therefore `f16` and `f128`
@@ -210,7 +217,16 @@ impl CodegenBackend for CraneliftCodegenBackend {
     }
 
     fn target_cpu(&self, sess: &Session) -> String {
-        self.llvm.target_cpu(sess)
+        #[cfg(feature = "llvm")]
+        return self.llvm.target_cpu(sess);
+
+        // FIXME handle `-Ctarget-cpu=native`
+        #[cfg(not(feature = "llvm"))]
+        match sess.opts.cg.target_cpu {
+            Some(ref name) => name,
+            None => sess.target.cpu.as_ref(),
+        }
+        .to_owned()
     }
 
     fn codegen_crate(&self, tcx: TyCtxt<'_>) -> Box<dyn Any> {
@@ -405,10 +421,10 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
     };
 
     // The features computed by rustc already include the ones implied by the target cpu and
-    // `-Ctarget-feature`, so don't pass the cpu name to Cranelift. In JIT mode LLVM isn't used to
-    // compute them.
+    // `-Ctarget-feature`, so don't pass the cpu name to Cranelift. Without LLVM, including in JIT
+    // mode, they are only a fixed set.
     let cranelift_features: &[(&str, &str)] = match target_tuple.architecture {
-        _ if jit => &[],
+        _ if jit || !cfg!(feature = "llvm") => &[],
         target_lexicon::Architecture::X86_64 => X86_64_CRANELIFT_FEATURES,
         target_lexicon::Architecture::Aarch64(_) => AARCH64_CRANELIFT_FEATURES,
         _ => &[],
@@ -427,5 +443,9 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
 /// This is the entrypoint for a hot plugged rustc_codegen_cranelift
 #[unsafe(no_mangle)]
 pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {
-    Box::new(CraneliftCodegenBackend { config: None, llvm: LlvmCodegenBackend::new() })
+    Box::new(CraneliftCodegenBackend {
+        config: None,
+        #[cfg(feature = "llvm")]
+        llvm: LlvmCodegenBackend::new(),
+    })
 }

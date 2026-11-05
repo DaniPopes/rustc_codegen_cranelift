@@ -150,6 +150,11 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
     TestCase::build_bin_and_run("aot.raw-dylib", "example/raw-dylib.rs", &[]),
     TestCase::custom("aot.target_features_cfg", &|runner| {
+        // Only the `llvm` feature of cg_clif reports the target features of LLVM.
+        if !runner.use_unstable_features {
+            return;
+        }
+
         let variants: &[(&str, &[&str])] = if runner.target_compiler.target.starts_with("x86_64") {
             &[
                 ("x86_64_v3", &["-Ctarget-cpu=x86-64-v3"]),
@@ -559,6 +564,7 @@ pub(crate) fn run_tests(
 struct TestRunner<'a> {
     is_native: bool,
     jit_supported: bool,
+    use_unstable_features: bool,
     panic_unwind_support: bool,
     skip_tests: &'a [&'a str],
     dirs: Dirs,
@@ -585,6 +591,7 @@ impl<'a> TestRunner<'a> {
         Self {
             is_native,
             jit_supported,
+            use_unstable_features,
             panic_unwind_support,
             skip_tests,
             dirs,
