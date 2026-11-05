@@ -14,6 +14,8 @@ pub struct BackendConfig {
 
 impl BackendConfig {
     /// Parse the configuration passed in using `-Cllvm-args`.
+    ///
+    /// Options starting with `-` are ignored. All other options are cg_clif options.
     pub fn from_opts(opts: &[String]) -> Result<Self, String> {
         let mut config = BackendConfig {
             jit_mode: false,
@@ -27,9 +29,10 @@ impl BackendConfig {
         };
 
         for opt in opts {
-            if opt.starts_with("-import-instr-limit") {
-                // Silently ignore -import-instr-limit. It is set by rust's build system even when
-                // testing cg_clif.
+            if opt.starts_with('-') {
+                // Options starting with `-` are LLVM options, which are handled by LLVM when the
+                // crate is delegated to it. (And ignored otherwise. E.g. rust's build system sets
+                // `-import-instr-limit` even when testing cg_clif.)
                 continue;
             }
             match &**opt {

@@ -13,6 +13,8 @@
 extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_attr_ir;
+#[cfg(feature = "llvm-delegate")]
+extern crate rustc_codegen_llvm;
 extern crate rustc_codegen_ssa;
 extern crate rustc_const_eval;
 extern crate rustc_data_structures;
@@ -20,10 +22,10 @@ extern crate rustc_errors;
 extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_log;
+extern crate rustc_metadata;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
-#[cfg(feature = "jit")]
 extern crate rustc_structures;
 extern crate rustc_symbol_mangling;
 extern crate rustc_target;
@@ -69,6 +71,7 @@ mod global_asm;
 mod inline_asm;
 mod intrinsics;
 mod linkage;
+mod llvm_delegate;
 mod main_shim;
 mod num;
 mod optimize;
@@ -380,5 +383,5 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
 /// This is the entrypoint for a hot plugged rustc_codegen_cranelift
 #[unsafe(no_mangle)]
 pub fn __rustc_codegen_backend() -> Box<dyn CodegenBackend> {
-    Box::new(CraneliftCodegenBackend { config: None })
+    Box::new(llvm_delegate::LlvmDelegateBackend::new())
 }

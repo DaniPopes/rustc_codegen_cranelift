@@ -11,6 +11,7 @@ use rustc_middle::mir::interpret::{
 };
 use rustc_middle::ty::layout::HasTypingEnv as _;
 use rustc_middle::ty::{ExistentialTraitRef, ScalarInt};
+use rustc_structures::CrateType;
 
 use crate::prelude::*;
 
@@ -40,11 +41,44 @@ pub(crate) fn codegen_static(tcx: TyCtxt<'_>, module: &mut dyn Module, def_id: D
     constants_cx.todo.push(TodoItem::Static(def_id));
     constants_cx.finalize(tcx, module);
 
-    data_id_for_static(
+    let data_id = data_id_for_static(
         tcx, module, def_id, false,
         // For a declaration the stated mutability doesn't matter.
         false,
-    )
+    );
+
+    if needs_imp_symbols(tcx)
+        && crate::linkage::get_static_linkage(tcx, def_id) == Linkage::Export
+        && !tcx.codegen_fn_attrs(def_id).flags.contains(CodegenFnAttrFlags::THREAD_LOCAL)
+    {
+        define_imp_symbol(tcx, module, def_id, data_id);
+    }
+
+    data_id
+}
+
+/// Whether the statics of this crate need an `__imp_` symbol. Crates compiled by LLVM reference
+/// the statics of other crates through `__imp_<symbol>`, because they don't know if the crate is
+/// linked statically or dynamically. For rlibs the defining crate has to provide the symbol.
+fn needs_imp_symbols(tcx: TyCtxt<'_>) -> bool {
+    tcx.sess.target.is_like_windows
+        && tcx.crate_types().contains(&CrateType::Rlib)
+        && !tcx.sess.opts.cg.linker_plugin_lto.enabled()
+}
+
+/// Define `__imp_<symbol> = &symbol` like `rustc_codegen_llvm` does for static data in rlibs.
+fn define_imp_symbol(tcx: TyCtxt<'_>, module: &mut dyn Module, def_id: DefId, data_id: DataId) {
+    let symbol_name = tcx.symbol_name(Instance::mono(tcx, def_id)).name;
+    let imp_id = module
+        .declare_data(&format!("__imp_{symbol_name}"), Linkage::Export, false, false)
+        .unwrap();
+
+    let mut data = DataDescription::new();
+    data.define(vec![0; tcx.data_layout.pointer_size().bytes() as usize].into_boxed_slice());
+    data.set_align(tcx.data_layout.pointer_align().bytes());
+    let global_value = module.declare_data_in_data(data_id, &mut data);
+    data.write_data_addr(0, global_value, 0);
+    module.define_data(imp_id, &data).unwrap();
 }
 
 pub(crate) fn codegen_tls_ref<'tcx>(

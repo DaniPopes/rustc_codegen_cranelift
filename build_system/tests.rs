@@ -145,6 +145,56 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             );
         }
     }),
+    TestCase::custom("aot.llvm_delegate", &|runner| {
+        // Crates at opt-level 1 or higher are compiled by LLVM, the rest by Cranelift. The rest of
+        // the test suite compiles everything with Cranelift, which this test overrides.
+        let rustc = |args: &[&str]| {
+            let mut cmd = runner.rustc_command(args);
+            cmd.env("CG_CLIF_LLVM_OPT_LEVEL", "1");
+            cmd.arg("--check-cfg=cfg(unwind)");
+            if runner.panic_unwind_support {
+                cmd.args(["--cfg", "unwind"]);
+            }
+            spawn_and_wait(cmd);
+        };
+
+        // `llvm_delegate_clif` is built at opt-level 0 and `llvm_delegate_llvm` at opt-level 3.
+        let lib_args = ["--crate-type=rlib", "--emit=link,obj", "-Ccodegen-units=1"];
+        rustc(&[&["example/llvm_delegate_clif.rs", "-Copt-level=0"], &lib_args[..]].concat());
+        rustc(
+            &[
+                &[
+                    "example/llvm_delegate_llvm.rs",
+                    "-Copt-level=3",
+                    "--extern",
+                    "llvm_delegate_clif",
+                ],
+                &lib_args[..],
+            ]
+            .concat(),
+        );
+
+        // cg_clif names itself in the producer string. This test also runs with
+        // `--use-backend llvm`, where no object contains it.
+        let obj =
+            fs::read(BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join("llvm_delegate_llvm.o"))
+                .unwrap();
+        let marker = b"with cranelift";
+        assert!(
+            !obj.windows(marker.len()).any(|window| window == marker),
+            "the opt-level 3 crate was not compiled by LLVM"
+        );
+
+        rustc(&[
+            "example/llvm_delegate_main.rs",
+            "-Copt-level=0",
+            "--extern",
+            "llvm_delegate_clif",
+            "--extern",
+            "llvm_delegate_llvm",
+        ]);
+        runner.run_out_command("llvm_delegate_main", &[]);
+    }),
     TestCase::build_bin_and_run("aot.issue-72793", "example/issue-72793.rs", &[]),
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
