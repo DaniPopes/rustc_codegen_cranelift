@@ -168,6 +168,8 @@ jobs:
         sed -i 's/jit./#jit./' config.txt
         sed -i 's/aot.powi_libcall_signature/#aot.powi_libcall_signature/' config.txt
         sed -i 's/aot.tls_conflicting_declarations/#aot.tls_conflicting_declarations/' config.txt
+        # Both sides of the test would be LLVM
+        sed -i 's/aot.abi_conformance/#aot.abi_conformance/' config.txt
 
     - name: Test
       env:
