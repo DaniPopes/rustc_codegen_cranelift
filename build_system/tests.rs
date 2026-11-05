@@ -146,6 +146,9 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         }
     }),
     TestCase::custom("aot.lto", &|runner| {
+        if runner.target_compiler.target.contains("windows-gnu") {
+            return;
+        }
         runner.run_rustc([
             "example/lto-lib.rs",
             "--crate-type",

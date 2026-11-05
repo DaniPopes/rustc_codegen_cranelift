@@ -135,6 +135,15 @@ impl CodegenBackend for CraneliftCodegenBackend {
             sess.dcx().fatal("targets requiring LTO are not supported by rustc_codegen_cranelift")
         }
 
+        // GNU ld produces invalid executables when linking all objects of the sysroot.
+        if sess.early_lto() != LtoCli::Unspecified
+            && sess.early_lto() != LtoCli::No
+            && sess.target.is_like_windows
+            && !sess.target.is_like_msvc
+        {
+            sess.dcx().fatal("LTO is not supported by rustc_codegen_cranelift on windows-gnu");
+        }
+
         if sess.opts.cg.instrument_coverage() != InstrumentCoverage::No {
             sess.dcx()
                 .fatal("`-Cinstrument-coverage` is LLVM specific and not supported by Cranelift");
