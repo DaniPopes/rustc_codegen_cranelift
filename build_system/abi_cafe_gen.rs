@@ -189,6 +189,8 @@ fn random_mix(test: &mut Test<'_>, seed: u64) {
         .concat()
         .into_iter()
         .filter(|ty| !RANDOM_MIX_EXCLUDED.contains(ty))
+        // The f128 tests are skipped on Windows.
+        .filter(|ty| !(cfg!(windows) && *ty == "f128"))
         .collect();
     for idx in 0..RANDOM_MIX_FUNCS {
         let len = 2 + rng.below(19);

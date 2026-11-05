@@ -210,6 +210,14 @@
 'ZstLast::conv_c::repr_c::rustc_calls_cgclif'.run = "skip"
 'ZstBetween::conv_c::repr_c::rustc_calls_cgclif'.run = "skip"
 'Exhaust_ZstBetween::conv_c::repr_c::rustc_calls_cgclif'.run = "skip"
+'ZstArray::conv_c::repr_c::rustc_calls_cgclif'.run = "skip"
+
+# f128 does not work with the Rust ABI on this target.
+'f128'.run = "skip"
+'F128x1'.run = "skip"
+'F128x2'.run = "skip"
+'Exhaust_f128'.run = "skip"
+'Exhaust_F128x1'.run = "skip"
 
 # abi-cafe ignores the result of f16 with the C convention on x86_64 Linux, because the GCC of its CI
 # is too old to support _Float16. Rust to Rust does not involve GCC, so check those.
