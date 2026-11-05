@@ -52,7 +52,9 @@ macro_rules! check_abi {
             mix(&[a, b, c, d, e, f, g, h, i as u64, fold(x), j as u64, fold(y)])
         );
 
-        let (a16, wrap) = (Align16(a, b), WrapU128(x));
+        #[cfg(not(target_arch = "aarch64"))]
+        let a16 = Align16(a, b);
+        let wrap = WrapU128(x);
         let (u8_u128, u128_f64) = (U8U128(i, y), U128F64(x, 1.5));
         let union = U128Union { x: y };
 
