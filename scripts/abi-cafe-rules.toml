@@ -1,6 +1,4 @@
 [target.'cfg(all(target_arch = "aarch64", target_os = "linux"))']
-'F32Array::conv_c'.busted = "check"
-
 # The C code that abi-cafe generates for f128 does not compile with the GCC of the aarch64 runner.
 'Exhaust_F128x1::conv_c::repr_c::cgclif_calls_cc'.busted = "build"
 'Exhaust_F128x1::conv_c::repr_c::cc_calls_cgclif'.busted = "build"
@@ -14,10 +12,6 @@
 'F128x2::conv_c::repr_c::cc_calls_cgclif'.busted = "build"
 'f128::conv_c::repr_c::cgclif_calls_cc'.busted = "build"
 'f128::conv_c::repr_c::cc_calls_cgclif'.busted = "build"
-
-[target.'cfg(all(target_arch = "aarch64", target_os = "macos"))']
-'OptionU128::conv_rust::repr_c::rustc_caller'.busted = "run"
-'OptionU128::conv_rust::repr_c::cgclif_caller'.busted = "check"
 
 [target.'cfg(all(target_arch = "x86_64", target_env = "msvc"))']
 # ICE: https://github.com/rust-lang/rust/issues/164207
