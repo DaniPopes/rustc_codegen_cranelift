@@ -8,6 +8,7 @@
 // make sure values survive wherever two locals do overlap.
 
 #![feature(custom_mir, core_intrinsics)]
+#![allow(internal_features)]
 
 use std::hint::black_box;
 use std::intrinsics::mir::*;
@@ -328,8 +329,9 @@ fn src_callee_mutates(seed: u64) -> u64 {
 fn src_whole_rewrite(seed: u64) -> u64 {
     let a = cp(seed);
     let mut b = a;
+    let before = cp_sum(b);
     b = cp(seed + 1);
-    cp_sum(a).wrapping_mul(3).wrapping_add(cp_sum(b))
+    cp_sum(a).wrapping_mul(3).wrapping_add(cp_sum(b)).wrapping_add(before)
 }
 
 #[inline(never)]
@@ -348,7 +350,10 @@ fn expected_callee_mutates(seed: u64) -> u64 {
 
 #[inline(never)]
 fn expected_whole_rewrite(seed: u64) -> u64 {
-    cp_sum(cp(seed)).wrapping_mul(3).wrapping_add(cp_sum(cp(seed + 1)))
+    cp_sum(cp(seed))
+        .wrapping_mul(3)
+        .wrapping_add(cp_sum(cp(seed + 1)))
+        .wrapping_add(cp_sum(cp(seed)))
 }
 
 #[inline(never)]
