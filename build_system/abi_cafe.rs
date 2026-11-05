@@ -107,8 +107,10 @@ fn test_names(dir: &Path) -> Vec<String> {
         let path = entry.unwrap().path();
         if path.is_dir() {
             names.extend(test_names(&path));
-        } else if let Some(name) = path.file_name().unwrap().to_str().unwrap().split(".").next() {
-            names.push(name.to_owned());
+        } else {
+            names.push(
+                path.file_name().unwrap().to_str().unwrap().split('.').next().unwrap().to_owned(),
+            );
         }
     }
     names

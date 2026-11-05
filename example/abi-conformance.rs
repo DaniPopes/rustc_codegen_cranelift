@@ -137,57 +137,31 @@ struct WrapU128(u128);
 #[repr(C)]
 struct WrapF128(f128);
 
+macro_rules! impl_val_two_fields {
+    ($($ty:ident)*) => {$(
+        impl Val for $ty {
+            fn val(seed: u64) -> Self {
+                $ty(Val::val(seed * 2), Val::val(seed * 2 + 1))
+            }
+        }
+    )*};
+}
+impl_val_two_fields!(MixedFloatInt IntPair FloatPair DoublePair Align16);
+
+macro_rules! impl_val_one_field {
+    ($($ty:ident)*) => {$(
+        impl Val for $ty {
+            fn val(seed: u64) -> Self {
+                $ty(Val::val(seed))
+            }
+        }
+    )*};
+}
+impl_val_one_field!(WrapU128 WrapF128 Big);
+
 impl Val for HfaF32x3 {
     fn val(seed: u64) -> Self {
         HfaF32x3(Val::val(seed * 4), Val::val(seed * 4 + 1), Val::val(seed * 4 + 2))
-    }
-}
-
-impl Val for MixedFloatInt {
-    fn val(seed: u64) -> Self {
-        MixedFloatInt(Val::val(seed * 2), Val::val(seed * 2 + 1))
-    }
-}
-
-impl Val for IntPair {
-    fn val(seed: u64) -> Self {
-        IntPair(Val::val(seed * 2), Val::val(seed * 2 + 1))
-    }
-}
-
-impl Val for FloatPair {
-    fn val(seed: u64) -> Self {
-        FloatPair(Val::val(seed * 2), Val::val(seed * 2 + 1))
-    }
-}
-
-impl Val for DoublePair {
-    fn val(seed: u64) -> Self {
-        DoublePair(Val::val(seed * 2), Val::val(seed * 2 + 1))
-    }
-}
-
-impl Val for Align16 {
-    fn val(seed: u64) -> Self {
-        Align16(Val::val(seed * 2), Val::val(seed * 2 + 1))
-    }
-}
-
-impl Val for WrapU128 {
-    fn val(seed: u64) -> Self {
-        WrapU128(Val::val(seed))
-    }
-}
-
-impl Val for WrapF128 {
-    fn val(seed: u64) -> Self {
-        WrapF128(Val::val(seed))
-    }
-}
-
-impl Val for Big {
-    fn val(seed: u64) -> Self {
-        Big(Val::val(seed))
     }
 }
 
@@ -358,6 +332,7 @@ variadic_cases! {
     fn variadic_none(a: u32;) -> ();
     fn variadic_ints_1(a: u32; i32) -> ();
     fn variadic_ints_3(a: u8; u32, i64, u64) -> u64;
+    fn variadic_small_ints(a: u32; i32, u32, i32, u32, i32, u32, i32, u32, i32, u32, i32, u32) -> ();
     fn variadic_ints_5(a: u32; u64, u64, u64, u64, u64) -> ();
     fn variadic_ints_6(a: u32; u64, u64, u64, u64, u64, u64) -> ();
     fn variadic_ints_7(a: u32; u64, u64, u64, u64, u64, u64, u64) -> ();

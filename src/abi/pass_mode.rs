@@ -221,16 +221,16 @@ pub(super) fn to_casted_value<'tcx>(
     let layout_size = u32::try_from(arg.layout().size.bytes()).unwrap();
     if abi_param_size > layout_size {
         // The last unit is partially outside the argument. Copy it to avoid reading out of bounds.
-        let align = u32::try_from(arg.layout().align.bytes()).unwrap().max(8);
+        let align = u32::try_from(arg.layout().align.bytes()).unwrap();
         let copy = fx.create_stack_slot(abi_param_size.next_multiple_of(align), align);
         let (from_addr, to_addr) = (ptr.get_addr(fx), copy.get_addr(fx));
-        let align = u8::try_from(align).unwrap_or(128);
+        let copy_align = u8::try_from(align).unwrap_or(128);
         fx.bcx.emit_small_memory_copy(
             fx.target_config,
             to_addr,
             from_addr,
             u64::from(layout_size),
-            align,
+            copy_align,
             1,
             true,
             MemFlagsData::new(),
