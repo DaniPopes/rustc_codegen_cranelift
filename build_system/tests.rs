@@ -155,8 +155,11 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             "-Copt-level=1",
         ]);
         // Fat LTO is not supported on MSVC.
-        let ltos: &[&str] =
-            if runner.target_compiler.target.contains("windows-msvc") { &["thin"] } else { &["thin", "fat"] };
+        let ltos: &[&str] = if runner.target_compiler.target.contains("windows-msvc") {
+            &["thin"]
+        } else {
+            &["thin", "fat"]
+        };
         for lto in ltos {
             runner.run_rustc(["example/lto-bin.rs", "-Copt-level=1", &format!("-Clto={lto}")]);
             runner.run_out_command("lto-bin", &[]);
