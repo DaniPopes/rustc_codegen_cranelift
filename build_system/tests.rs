@@ -262,6 +262,12 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
     TestCase::build_bin_and_run("aot.issue-72793", "example/issue-72793.rs", &[]),
     // Call every function of a crate built with one backend from a crate built with the other one.
     TestCase::custom("aot.mixed_backend_abi", &|runner| {
+        let (arch, _) = runner.target_compiler.target.split_once('-').unwrap();
+        if !matches!(arch, "x86_64" | "aarch64") {
+            eprintln!("Skipping `mixed_backend_abi` test: unsupported target");
+            return;
+        }
+
         let llvm = "-Zcodegen-backend=llvm";
         for (name, callee_flag, caller_flag) in
             [("llvm", Some(llvm), None), ("clif", None, Some(llvm))]
