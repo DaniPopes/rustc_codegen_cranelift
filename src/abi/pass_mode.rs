@@ -120,8 +120,10 @@ impl<'tcx> ArgAbiExt<'tcx> for ArgAbi<'tcx, Ty<'tcx>> {
                     .collect::<SmallVec<[_; 2]>>();
                 if params.len() > 1 {
                     // The parts of the aggregate are all passed in registers or all on the stack.
+                    // Like for LLVM the alignment on the stack is the one of the parts, not of
+                    // the type, which is not passed on.
                     let count = u32::try_from(params.len()).unwrap();
-                    let align = u32::try_from(self.layout.align.abi.bytes()).unwrap();
+                    let align = params.iter().map(|param| param.value_type.bytes()).max().unwrap();
                     params[0].purpose = ArgumentPurpose::AggregateStart(count, align);
                 }
                 params
