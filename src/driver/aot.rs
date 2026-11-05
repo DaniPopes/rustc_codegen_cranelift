@@ -214,11 +214,14 @@ fn compile_cgu(
     mut aot_module: AotModule,
     cgu_name: String,
     kind: ModuleKind,
+    optimize: bool,
 ) -> Result<CompiledModule, String> {
     prof.generic_activity_with_arg("compile functions", &*cgu_name).run(|| {
         cranelift_codegen::timing::set_thread_profiler(Box::new(super::MeasuremeProfiler(
             prof.clone(),
         )));
+
+        crate::inline::inline_cgu(dcx, optimize, &mut aot_module.codegened_functions);
 
         let mut cached_context = Context::new();
         for codegened_func in aot_module.codegened_functions {
@@ -385,6 +388,7 @@ impl WriteBackendMethods for AotDriver {
             module.module_llvm,
             module.name,
             module.kind,
+            config.opt_level.is_some_and(|opt_level| opt_level != OptLevel::No),
         )
         .unwrap_or_else(|err| dcx.handle().fatal(err))
     }

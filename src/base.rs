@@ -5,6 +5,7 @@ use cranelift_codegen::ir::UserFuncName;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::ModuleError;
 use rustc_ast::InlineAsmOptions;
+use rustc_attr_ir::InlineAttr;
 use rustc_attr_ir::lang_items::LangItem;
 use rustc_codegen_ssa::base::is_call_from_compiler_builtins_to_upstream_monomorphization;
 use rustc_data_structures::profiling::SelfProfilerRef;
@@ -23,13 +24,17 @@ use crate::prelude::*;
 use crate::pretty_clif::{CommentWriter, format_clif_ir_header};
 use crate::{codegen_f16_f128, enable_verifier};
 
+/// The namespace of the user external names of functions.
+pub(crate) const FUNC_NAMESPACE: u32 = 0;
+
 pub(crate) struct CodegenedFunction {
     symbol_name: String,
-    func_id: FuncId,
-    func: Function,
+    pub(crate) func_id: FuncId,
+    pub(crate) func: Function,
     clif_comments: CommentWriter,
-    func_debug_cx: Option<FunctionDebugContext>,
+    pub(crate) func_debug_cx: Option<FunctionDebugContext>,
     inline_asm: String,
+    pub(crate) inline: InlineAttr,
 }
 
 pub(crate) fn codegen_fn<'tcx>(
@@ -64,7 +69,7 @@ pub(crate) fn codegen_fn<'tcx>(
     let mut func_ctx = FunctionBuilderContext::new();
     let mut func = cached_func;
     func.clear();
-    func.name = UserFuncName::user(0, func_id.as_u32());
+    func.name = UserFuncName::user(FUNC_NAMESPACE, func_id.as_u32());
     func.signature = sig;
     if debug_context.is_some() {
         func.collect_debug_info();
@@ -145,7 +150,15 @@ pub(crate) fn codegen_fn<'tcx>(
     // Verify function
     verify_func(tcx, &clif_comments, &func);
 
-    CodegenedFunction { symbol_name, func_id, func, clif_comments, func_debug_cx, inline_asm }
+    CodegenedFunction {
+        symbol_name,
+        func_id,
+        func,
+        clif_comments,
+        func_debug_cx,
+        inline_asm,
+        inline: tcx.codegen_instance_attrs(instance.def).inline,
+    }
 }
 
 pub(crate) fn compile_fn(

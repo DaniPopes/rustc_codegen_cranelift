@@ -87,6 +87,55 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         "example/track-caller-attribute.rs",
         &[],
     ),
+    TestCase::custom("aot.inline", &|runner| {
+        for opt_level in ["0", "2"] {
+            runner.run_rustc([
+                "example/inline.rs",
+                &format!("-Copt-level={opt_level}"),
+                // The MIR inliner would inline the calls first.
+                "-Zinline-mir=no",
+            ]);
+            runner.run_out_command("inline", &[]);
+        }
+    }),
+    TestCase::custom("aot.inline-stack", &|runner| {
+        for opt_level in ["0", "2"] {
+            runner.run_rustc([
+                "example/inline-stack.rs",
+                &format!("-Copt-level={opt_level}"),
+                // The MIR inliner would inline the calls first.
+                "-Zinline-mir=no",
+            ]);
+            runner.run_out_command("inline-stack", &[]);
+        }
+    }),
+    TestCase::custom("aot.inline-calls", &|runner| {
+        // Only the number of calls that are left in the CLIF of `inline_check_caller` matters.
+        for (opt_level, expected_calls) in [("0", 2), ("2", 1)] {
+            let mut cmd = runner.rustc_command([
+                "example/inline-calls.rs",
+                &format!("-Copt-level={opt_level}"),
+                // The MIR inliner would inline the calls first.
+                "-Zinline-mir=no",
+                // Dump the CLIF. rustc fails to find the LLVM IR afterwards, which doesn't matter.
+                "--emit=llvm-ir",
+            ]);
+            let output = cmd.output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            let clif_dir = BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join("inline-calls.clif");
+            let read = |postfix| {
+                fs::read_to_string(clif_dir.join(format!("inline_check_caller.{postfix}.clif")))
+                    .unwrap_or_else(|err| panic!("failed to read the CLIF: {err}\n{stderr}"))
+            };
+            assert_eq!(read("unopt").matches("call fn").count(), 4, "opt-level={opt_level}");
+            assert_eq!(
+                read("opt").matches("call fn").count(),
+                expected_calls,
+                "opt-level={opt_level}"
+            );
+        }
+    }),
     TestCase::build_bin_and_run("aot.float-minmax-pass", "example/float-minmax-pass.rs", &[]),
     TestCase::custom("aot.powi_libcall_signature", &|runner| {
         let mut cmd = runner.rustc_command(["example/powi-libcall-signature.rs"]);
