@@ -98,6 +98,17 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             runner.run_out_command("inline", &[]);
         }
     }),
+    TestCase::custom("aot.inline-stack", &|runner| {
+        for opt_level in ["0", "2"] {
+            runner.run_rustc([
+                "example/inline-stack.rs",
+                &format!("-Copt-level={opt_level}"),
+                // The MIR inliner would inline the calls first.
+                "-Zinline-mir=no",
+            ]);
+            runner.run_out_command("inline-stack", &[]);
+        }
+    }),
     TestCase::custom("aot.inline-calls", &|runner| {
         // Only the number of calls that are left in the CLIF of `inline_check_caller` matters.
         for (opt_level, expected_calls) in [("0", 2), ("2", 1)] {
