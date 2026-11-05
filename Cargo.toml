@@ -43,9 +43,12 @@ smallvec = "1.8.1"
 
 [features]
 # Enable features not ready to be enabled when compiling as part of rustc
-unstable-features = ["jit", "inline_asm_sym"]
+unstable-features = ["jit", "inline_asm_sym", "llvm"]
 jit = ["cranelift-jit", "libloading"]
 inline_asm_sym = []
+# Report the target features of the LLVM backend, which isn't available when rustc is built
+# without it.
+llvm = []
 unwinding = [] # Not yet included in unstable-features for performance reasons
 
 [package.metadata.rust-analyzer]
