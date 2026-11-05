@@ -23,7 +23,7 @@ fn aligned_slots(x: u64) -> u64 {
     let wide = Cell::new(u128::from(x) << 64);
     black_box((&aligned, &wide));
     assert_eq!(&aligned as *const Aligned as usize % 16, 0);
-    assert_eq!(wide.as_ptr() as usize % 16, 0);
+    assert_eq!(wide.as_ptr() as usize % align_of::<u128>(), 0);
     u64::from(aligned.0) + (wide.get() >> 64) as u64
 }
 
