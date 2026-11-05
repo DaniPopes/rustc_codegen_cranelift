@@ -1,4 +1,6 @@
 [target.'cfg(all(target_arch = "aarch64", target_os = "linux"))']
+# An aggregate of floats that is passed on the stack gets an 8-byte slot for every float from
+# Cranelift, where LLVM and GCC pack it. The same goes for the other float aggregates below.
 'F32Array::conv_c'.busted = "check"
 
 # A 128-bit integer that doesn't fit in the remaining integer registers is passed on the stack, but
