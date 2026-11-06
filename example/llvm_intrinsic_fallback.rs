@@ -34,6 +34,9 @@ fn main() {
         if is_x86_feature_detected!("avx512f") {
             test_avx512_ternarylogic();
         }
+        if is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512vl") {
+            test_avx512_getmant_pd();
+        }
         if is_x86_feature_detected!("avx512f") {
             test_avx512_mask_cmp_pd();
             test_avx512_compressstoreu();
@@ -152,6 +155,20 @@ unsafe fn test_avx512_mask_cmp_pd() {
         ),
         0b0000_0010
     );
+}
+
+// The immediate is computed from two const generics, so it is not a literal in the caller.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512vl")]
+unsafe fn test_avx512_getmant_pd() {
+    let a: [f64; 2] = [10.0, -0.3];
+    let r: [f64; 2] =
+        transmute(_mm_getmant_pd::<_MM_MANT_NORM_P75_1P5, _MM_MANT_SIGN_ZERO>(transmute(a)));
+    assert_eq!(r, [1.25, 1.2]);
+    let r: [f64; 2] =
+        transmute(_mm_getmant_pd::<_MM_MANT_NORM_1_2, _MM_MANT_SIGN_NAN>(transmute(a)));
+    assert_eq!(r[0], 1.25);
+    assert!(r[1].is_nan());
 }
 
 // A pointer argument, a mask argument and no return value.
