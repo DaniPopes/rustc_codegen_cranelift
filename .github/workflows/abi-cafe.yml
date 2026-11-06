@@ -10,6 +10,12 @@ on:
 
 permissions: {}
 
+concurrency:
+  # A new push cancels the branch's or pull request's older runs. Each main run gets its own
+  # group, so main runs are never cancelled, not even queued ones.
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 defaults:
   run:
     shell: bash
@@ -21,9 +27,6 @@ jobs:
   abi_cafe:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.os }}-${{ matrix.env.TARGET_TUPLE }}
-      cancel-in-progress: true
 
     strategy:
       fail-fast: true
