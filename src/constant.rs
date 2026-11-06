@@ -560,6 +560,42 @@ pub(crate) fn mir_operand_get_const_val<'tcx>(
                                     }
                                     computed_scalar_int = mir_operand_get_const_val(fx, operand)
                                 }
+                                Rvalue::BinaryOp(bin_op, operands) => {
+                                    if mem::replace(&mut assigned, true) {
+                                        return None; // local assigned twice
+                                    }
+                                    let (lhs, rhs) = &**operands;
+                                    let lhs_ty = fx.monomorphize(lhs.ty(fx.mir, fx.tcx));
+                                    if !matches!(lhs_ty.kind(), ty::Uint(_) | ty::Int(_)) {
+                                        return None;
+                                    }
+                                    let lhs = mir_operand_get_const_val(fx, lhs)?;
+                                    let rhs = mir_operand_get_const_val(fx, rhs)?;
+                                    let size = fx.layout_of(lhs_ty).size;
+                                    let (lhs_bits, rhs_bits) =
+                                        (lhs.to_uint(lhs.size()), rhs.to_uint(rhs.size()));
+                                    let bits = match bin_op {
+                                        BinOp::Add | BinOp::AddUnchecked => {
+                                            lhs_bits.wrapping_add(rhs_bits)
+                                        }
+                                        BinOp::Sub | BinOp::SubUnchecked => {
+                                            lhs_bits.wrapping_sub(rhs_bits)
+                                        }
+                                        BinOp::Mul | BinOp::MulUnchecked => {
+                                            lhs_bits.wrapping_mul(rhs_bits)
+                                        }
+                                        BinOp::BitAnd => lhs_bits & rhs_bits,
+                                        BinOp::BitOr => lhs_bits | rhs_bits,
+                                        BinOp::BitXor => lhs_bits ^ rhs_bits,
+                                        // The shift amount is masked to the width of the left operand.
+                                        BinOp::Shl | BinOp::ShlUnchecked => {
+                                            lhs_bits << (rhs_bits % u128::from(size.bits()))
+                                        }
+                                        _ => return None,
+                                    };
+                                    computed_scalar_int =
+                                        ScalarInt::try_from_uint(size.truncate(bits), size);
+                                }
                                 _ => return None,
                             }
                         }
