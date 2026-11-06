@@ -319,6 +319,8 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             };
             let a = codegen_operand(fx, &a.node);
             let b = codegen_operand(fx, &b.node);
+            // `value_lane_dyn` needs `a` in memory. Do this once rather than for every lane.
+            let a = a.spill_vector(fx);
 
             // Based on the pseudocode at https://github.com/rust-lang/stdarch/blob/1cfbca8b38fd9b4282b2f054f61c6ca69fc7ce29/crates/core_arch/src/x86/avx2.rs#L2319-L2332
             let zero = fx.bcx.ins().iconst(types::I8, 0);
@@ -329,7 +331,8 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
                 let a_idx = fx.bcx.ins().uextend(fx.pointer_type, a_idx);
                 let a_lane = a.value_lane_dyn(fx, a_idx).load_scalar(fx);
                 let res = fx.bcx.ins().select(is_zero, zero, a_lane);
-                ret.place_lane(fx, i).to_ptr().store(fx, res, MemFlagsData::trusted());
+                let ret_lane = ret.place_lane(fx, i);
+                ret_lane.write_cvalue(fx, CValue::by_val(res, ret_lane.layout()));
             }
 
             if intrinsic == "llvm.x86.avx2.pshuf.b" {
@@ -341,7 +344,8 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
                     let a_idx = fx.bcx.ins().uextend(fx.pointer_type, a_idx);
                     let a_lane = a.value_lane_dyn(fx, a_idx).load_scalar(fx);
                     let res = fx.bcx.ins().select(is_zero, zero, a_lane);
-                    ret.place_lane(fx, i).to_ptr().store(fx, res, MemFlagsData::trusted());
+                    let ret_lane = ret.place_lane(fx, i);
+                    ret_lane.write_cvalue(fx, CValue::by_val(res, ret_lane.layout()));
                 }
             }
         }

@@ -347,6 +347,7 @@ pub(crate) fn codegen_fn_prelude<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, start_
         if let ArgKind::Normal(Some(ArgValue { value: val, is_underaligned_pointee: false })) =
             arg_kind
             && let Some((addr, meta)) = val.try_to_ptr()
+            && !ssa_analyzed[local].is_ssa(fx, ty)
         {
             // Ownership of the value at the backing storage for an argument is passed to the
             // callee per the ABI, so it is fine to borrow the backing storage of this argument

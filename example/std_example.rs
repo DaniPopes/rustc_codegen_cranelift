@@ -11,6 +11,7 @@
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 use std::hint::black_box;
+use std::intrinsics::simd::{simd_extract, simd_extract_dyn, simd_insert, simd_insert_dyn};
 use std::io::Write;
 use std::ops::Coroutine;
 
@@ -119,6 +120,8 @@ fn main() {
 
     println!("{:?}", std::intrinsics::caller_location());
 
+    test_simd_values();
+
     #[cfg(target_arch = "x86_64")]
     unsafe {
         test_simd();
@@ -211,6 +214,131 @@ fn rust_call_abi() {
 #[cfg_attr(target_arch = "s390x", allow(dead_code))]
 #[repr(simd)]
 struct I64X2([i64; 2]);
+
+#[repr(simd)]
+#[derive(Copy, Clone)]
+struct U8X16([u8; 16]);
+
+#[repr(simd)]
+#[derive(Copy, Clone)]
+struct U8X8([u8; 8]);
+
+#[repr(simd)]
+#[derive(Copy, Clone)]
+struct U32X4([u32; 4]);
+
+#[repr(simd)]
+#[derive(Copy, Clone)]
+struct F32X4([f32; 4]);
+
+#[derive(Copy, Clone)]
+struct WrappedU8X16(U8X16);
+
+struct DropWrappedU8X16(U8X16);
+
+static DROPPED_LANE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+impl Drop for DropWrappedU8X16 {
+    fn drop(&mut self) {
+        DROPPED_LANE
+            .store(unsafe { simd_extract(self.0, 5) }, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[inline(never)]
+fn simd_value_with_drop_glue(v: DropWrappedU8X16, extract: bool) -> u8 {
+    if black_box(extract) { unsafe { simd_extract(v.0, 2) } } else { 0 }
+}
+
+#[inline(never)]
+fn simd_value_by_value(v: U8X16, lane: u32) -> (U8X16, u8) {
+    unsafe { (simd_insert_dyn(v, lane, 0xaa_u8), simd_extract_dyn(v, lane)) }
+}
+
+/// Lane access and transmutes of SIMD values with all lanes different, such that mixing up lanes
+/// or reinterpreting them in the wrong order is noticed.
+fn test_simd_values() {
+    let mut bytes = [0u8; 16];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = (i as u8 + 1).wrapping_mul(0x1d) ^ 0x5c;
+    }
+    let v = black_box(U8X16(bytes));
+
+    unsafe {
+        for i in 0..16 {
+            assert_eq!(simd_extract_dyn::<_, u8>(v, black_box(i as u32)), bytes[i]);
+        }
+        assert_eq!(simd_extract::<_, u8>(v, 0), bytes[0]);
+        assert_eq!(simd_extract::<_, u8>(v, 15), bytes[15]);
+
+        // Insert with a constant and a dynamic index.
+        let mut expected = bytes;
+        expected[3] = 0xe1;
+        expected[12] = 0xd2;
+        let w = simd_insert(v, 3, 0xe1_u8);
+        let w = simd_insert_dyn(w, black_box(12), 0xd2_u8);
+        assert_eq!(std::mem::transmute::<_, [u8; 16]>(w), expected);
+        let expected_w = expected;
+
+        let (w2, old) = simd_value_by_value(w, black_box(12));
+        assert_eq!(old, 0xd2);
+        expected[12] = 0xaa;
+        assert_eq!(std::mem::transmute::<_, [u8; 16]>(w2), expected);
+
+        #[cfg(target_endian = "little")]
+        {
+            assert_eq!(std::mem::transmute::<_, u128>(w), u128::from_le_bytes(expected_w));
+            let expected = u128::from_le_bytes(bytes);
+            assert_eq!(std::mem::transmute::<_, u128>(v), expected);
+            assert_eq!(
+                std::mem::transmute::<_, (u64, u64)>(v),
+                (expected as u64, (expected >> 64) as u64)
+            );
+
+            // Reinterpret the lanes as wider integers and floats.
+            let words = std::mem::transmute::<_, U32X4>(v);
+            for i in 0..4 {
+                let word = u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap());
+                assert_eq!(simd_extract_dyn::<_, u32>(words, i as u32), word);
+            }
+            let words = simd_insert_dyn(words, black_box(2), 0x3f80_0000_u32);
+            let floats = std::mem::transmute::<_, F32X4>(words);
+            assert_eq!(simd_extract::<_, f32>(floats, 2), 1.0);
+            assert_eq!(
+                simd_extract::<_, f32>(floats, 1).to_bits(),
+                u32::from_le_bytes(bytes[4..8].try_into().unwrap())
+            );
+            assert_eq!(std::mem::transmute::<_, u128>(floats) >> 96, expected >> 96);
+
+            // Build a vector from a number.
+            let from_num = std::mem::transmute::<u128, U8X16>(expected.rotate_left(8));
+            assert_eq!(simd_extract::<_, u8>(from_num, 1), bytes[0]);
+            assert_eq!(simd_extract::<_, u8>(from_num, 0), bytes[15]);
+        }
+
+        // A struct wrapping a vector.
+        let wrapped = WrappedU8X16(w);
+        let inner = black_box(wrapped).0;
+        assert_eq!(std::mem::transmute::<_, [u8; 16]>(inner), expected_w);
+
+        // A value with drop glue takes its address when dropped.
+        let extracted = simd_value_with_drop_glue(DropWrappedU8X16(w), true);
+        let dropped = DROPPED_LANE.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!((extracted, dropped), (expected_w[2], expected_w[5]));
+
+        // A vector whose address is taken stays in memory.
+        let r = black_box(&w);
+        assert_eq!(simd_extract::<_, u8>(*r, 3), 0xe1);
+
+        // 64-bit vectors, a vector register on some targets.
+        let small = black_box(U8X8([1, 2, 3, 4, 5, 6, 7, 8]));
+        let small = simd_insert_dyn(small, black_box(5), 0x77_u8);
+        assert_eq!(std::mem::transmute::<_, [u8; 8]>(small), [1, 2, 3, 4, 5, 0x77, 7, 8]);
+        assert_eq!(simd_extract::<_, u8>(small, 7), 8);
+        #[cfg(target_endian = "little")]
+        assert_eq!(std::mem::transmute::<_, u64>(small), 0x0807_7705_0403_0201);
+    }
+}
 
 #[cfg_attr(target_arch = "s390x", allow(dead_code))]
 #[allow(improper_ctypes_definitions)]

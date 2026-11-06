@@ -55,6 +55,42 @@ fn codegen_field<'tcx>(
     }
 }
 
+/// Extract the `lane_idx`th lane of type `lane_ty` from a vector value. The lane either has the
+/// size of a lane of the vector or spans the whole vector.
+fn vector_extract_lane(
+    fx: &mut FunctionCx<'_, '_, '_>,
+    vector: Value,
+    lane_ty: Type,
+    lane_idx: u64,
+) -> Value {
+    let vector_ty = fx.bcx.func.dfg.value_type(vector);
+    if lane_ty.bytes() == vector_ty.bytes() {
+        return codegen_bitcast(fx, lane_ty, vector);
+    }
+    let lane = fx.bcx.ins().extractlane(vector, u8::try_from(lane_idx).unwrap());
+    if lane_ty == vector_ty.lane_type() { lane } else { codegen_bitcast(fx, lane_ty, lane) }
+}
+
+/// Replace the `lane_idx`th lane of a vector value with `lane`. The lane either has the size of a
+/// lane of the vector or spans the whole vector.
+fn vector_insert_lane(
+    fx: &mut FunctionCx<'_, '_, '_>,
+    vector: Value,
+    lane: Value,
+    lane_idx: u64,
+) -> Value {
+    let vector_ty = fx.bcx.func.dfg.value_type(vector);
+    if fx.bcx.func.dfg.value_type(lane).bytes() == vector_ty.bytes() {
+        return codegen_bitcast(fx, vector_ty, lane);
+    }
+    let lane = if fx.bcx.func.dfg.value_type(lane) == vector_ty.lane_type() {
+        lane
+    } else {
+        codegen_bitcast(fx, vector_ty.lane_type(), lane)
+    };
+    fx.bcx.ins().insertlane(vector, lane, u8::try_from(lane_idx).unwrap())
+}
+
 /// A read-only value
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct CValue<'tcx>(CValueInner, TyAndLayout<'tcx>);
@@ -114,6 +150,12 @@ impl<'tcx> CValue<'tcx> {
                 (cplace.to_ptr(), None)
             }
         }
+    }
+
+    /// Store a SIMD vector held in a register to memory to access its lanes by address.
+    pub(crate) fn spill_vector(self, fx: &mut FunctionCx<'_, '_, 'tcx>) -> CValue<'tcx> {
+        let (ptr, None) = self.force_stack(fx) else { unreachable!() };
+        CValue::by_ref(ptr, self.1)
     }
 
     pub(crate) fn try_to_ptr(self) -> Option<(Pointer, Option<Value>)> {
@@ -178,7 +220,13 @@ impl<'tcx> CValue<'tcx> {
     ) -> CValue<'tcx> {
         let layout = self.1;
         match self.0 {
-            CValueInner::ByVal(_) => unreachable!(),
+            // A struct wrapping a vector in a register.
+            CValueInner::ByVal(_) => {
+                assert!(!layout.ty.is_simd());
+                let field_layout = layout.field(&*fx, field.index());
+                assert_eq!(field_layout.backend_repr, layout.backend_repr);
+                CValue(self.0, field_layout)
+            }
             CValueInner::ByValPair(val1, val2) => match layout.backend_repr {
                 BackendRepr::ScalarPair { .. } => {
                     let val = match field.as_u32() {
@@ -215,7 +263,11 @@ impl<'tcx> CValue<'tcx> {
         assert!(lane_idx < lane_count);
 
         match self.0 {
-            CValueInner::ByVal(_) | CValueInner::ByValPair(_, _) => unreachable!(),
+            CValueInner::ByVal(vector) => {
+                let lane_ty = fx.clif_type(lane_ty).unwrap();
+                CValue::by_val(vector_extract_lane(fx, vector, lane_ty, lane_idx), lane_layout)
+            }
+            CValueInner::ByValPair(_, _) => unreachable!(),
             CValueInner::ByRef(ptr, None) => {
                 let field_offset = lane_layout.size * lane_idx;
                 let field_ptr = ptr.offset_i64(fx, i64::try_from(field_offset.bytes()).unwrap());
@@ -242,7 +294,11 @@ impl<'tcx> CValue<'tcx> {
         );
 
         match self.0 {
-            CValueInner::ByVal(_) | CValueInner::ByValPair(_, _) => unreachable!(),
+            CValueInner::ByVal(vector) => {
+                let lane_ty = fx.clif_type(lane_ty).unwrap();
+                CValue::by_val(vector_extract_lane(fx, vector, lane_ty, lane_idx), lane_layout)
+            }
+            CValueInner::ByValPair(_, _) => unreachable!(),
             CValueInner::ByRef(ptr, None) => {
                 let field_offset = lane_layout.size * lane_idx;
                 let field_ptr = ptr.offset_i64(fx, i64::try_from(field_offset.bytes()).unwrap());
@@ -263,7 +319,8 @@ impl<'tcx> CValue<'tcx> {
         let (_lane_count, lane_ty) = layout.ty.simd_size_and_type(fx.tcx);
         let lane_layout = fx.layout_of(lane_ty);
         match self.0 {
-            CValueInner::ByVal(_) | CValueInner::ByValPair(_, _) => unreachable!(),
+            CValueInner::ByVal(_) => self.spill_vector(fx).value_lane_dyn(fx, lane_idx),
+            CValueInner::ByValPair(_, _) => unreachable!(),
             CValueInner::ByRef(ptr, None) => {
                 let lane_idx = clif_intcast(fx, lane_idx, fx.pointer_type, false);
                 let field_offset =
@@ -357,6 +414,8 @@ pub(crate) struct CPlace<'tcx> {
 enum CPlaceInner {
     Var(Local, Variable),
     VarPair(Local, Variable, Variable),
+    /// A lane of a SIMD vector held in a variable.
+    VarLane(Variable, u64),
     Addr(Pointer, Option<Value>),
 }
 
@@ -395,7 +454,7 @@ impl<'tcx> CPlace<'tcx> {
         local: Local,
         layout: TyAndLayout<'tcx>,
     ) -> CPlace<'tcx> {
-        let var = fx.bcx.declare_var(fx.clif_type(layout.ty).unwrap());
+        let var = fx.bcx.declare_var(crate::analyze::ssa_clif_type(fx, layout).unwrap());
         CPlace { inner: CPlaceInner::Var(local, var), layout }
     }
 
@@ -437,6 +496,11 @@ impl<'tcx> CPlace<'tcx> {
                 //fx.bcx.set_val_label(val2, cranelift_codegen::ir::ValueLabel::new(var2.index()));
                 CValue::by_val_pair(val1, val2, layout)
             }
+            CPlaceInner::VarLane(var, lane_idx) => {
+                let vector = fx.bcx.use_var(var);
+                let lane_ty = fx.clif_type(layout.ty).unwrap();
+                CValue::by_val(vector_extract_lane(fx, vector, lane_ty, lane_idx), layout)
+            }
             CPlaceInner::Addr(ptr, extra) => {
                 if let Some(extra) = extra {
                     CValue::by_ref_unsized(ptr, extra, layout)
@@ -452,6 +516,9 @@ impl<'tcx> CPlace<'tcx> {
             CPlaceInner::Var(_local, var) => ("ssa", format!("var={}", var.index())),
             CPlaceInner::VarPair(_local, var1, var2) => {
                 ("ssa", format!("var=({}, {})", var1.index(), var2.index()))
+            }
+            CPlaceInner::VarLane(var, lane_idx) => {
+                ("ssa", format!("var={},lane={}", var.index(), lane_idx))
             }
             CPlaceInner::Addr(ptr, meta) => {
                 let meta =
@@ -476,7 +543,7 @@ impl<'tcx> CPlace<'tcx> {
         match self.inner {
             CPlaceInner::Addr(ptr, None) => ptr,
             CPlaceInner::Addr(_, Some(_)) => bug!("Expected sized cplace, found {:?}", self),
-            CPlaceInner::Var(_, _) | CPlaceInner::VarPair(_, _, _) => {
+            CPlaceInner::Var(_, _) | CPlaceInner::VarPair(_, _, _) | CPlaceInner::VarLane(..) => {
                 bug!("Expected CPlace::Addr, found {:?}", self)
             }
         }
@@ -486,7 +553,10 @@ impl<'tcx> CPlace<'tcx> {
     pub(crate) fn to_ptr_unsized(self) -> (Pointer, Value) {
         match self.inner {
             CPlaceInner::Addr(ptr, Some(extra)) => (ptr, extra),
-            CPlaceInner::Addr(_, None) | CPlaceInner::Var(_, _) | CPlaceInner::VarPair(_, _, _) => {
+            CPlaceInner::Addr(_, None)
+            | CPlaceInner::Var(_, _)
+            | CPlaceInner::VarPair(_, _, _)
+            | CPlaceInner::VarLane(..) => {
                 bug!("Expected unsized cplace, found {:?}", self)
             }
         }
@@ -494,7 +564,9 @@ impl<'tcx> CPlace<'tcx> {
 
     pub(crate) fn try_to_ptr(self) -> Option<Pointer> {
         match self.inner {
-            CPlaceInner::Var(_, _) | CPlaceInner::VarPair(_, _, _) => None,
+            CPlaceInner::Var(_, _) | CPlaceInner::VarPair(_, _, _) | CPlaceInner::VarLane(..) => {
+                None
+            }
             CPlaceInner::Addr(ptr, None) => Some(ptr),
             CPlaceInner::Addr(_, Some(_)) => bug!("Expected sized cplace, found {:?}", self),
         }
@@ -559,16 +631,23 @@ impl<'tcx> CPlace<'tcx> {
         let dst_layout = self.layout();
         match self.inner {
             CPlaceInner::Var(_local, var) => {
-                let data = match from.1.backend_repr {
-                    BackendRepr::Scalar(_) => CValue(from.0, dst_layout).load_scalar(fx),
+                let data = match (from.0, from.1.backend_repr) {
+                    (CValueInner::ByVal(val), _) => val,
+                    (_, BackendRepr::Scalar(_)) => CValue(from.0, dst_layout).load_scalar(fx),
                     _ => {
                         let (ptr, meta) = from.force_stack(fx);
                         assert!(meta.is_none());
                         CValue(CValueInner::ByRef(ptr, None), dst_layout).load_scalar(fx)
                     }
                 };
-                let dst_ty = fx.clif_type(self.layout().ty).unwrap();
+                let dst_ty = crate::analyze::ssa_clif_type(fx, dst_layout).unwrap();
                 transmute_scalar(fx, var, data, dst_ty);
+            }
+            CPlaceInner::VarLane(var, lane_idx) => {
+                let data = CValue(from.0, dst_layout).load_scalar(fx);
+                let vector = fx.bcx.use_var(var);
+                let vector = vector_insert_lane(fx, vector, data, lane_idx);
+                fx.bcx.def_var(var, vector);
             }
             CPlaceInner::VarPair(_local, var1, var2) => {
                 let (data1, data2) = match from.1.backend_repr {
@@ -675,6 +754,15 @@ impl<'tcx> CPlace<'tcx> {
     ) -> CPlace<'tcx> {
         let layout = self.layout();
 
+        // A struct wrapping a vector in a register.
+        if let CPlaceInner::Var(local, var) = self.inner {
+            assert!(matches!(layout.backend_repr, BackendRepr::SimdVector { .. }));
+            assert!(!layout.ty.is_simd());
+            let layout = layout.field(&*fx, field.index());
+            assert_eq!(layout.backend_repr, self.layout().backend_repr);
+            return CPlace { inner: CPlaceInner::Var(local, var), layout };
+        }
+
         if let CPlaceInner::VarPair(local, var1, var2) = self.inner {
             let layout = layout.field(&*fx, field.index());
 
@@ -687,7 +775,7 @@ impl<'tcx> CPlace<'tcx> {
 
         let (base, extra) = match self.inner {
             CPlaceInner::Addr(ptr, extra) => (ptr, extra),
-            CPlaceInner::Var(_, _) | CPlaceInner::VarPair(_, _, _) => {
+            CPlaceInner::Var(_, _) | CPlaceInner::VarPair(_, _, _) | CPlaceInner::VarLane(..) => {
                 bug!("Expected CPlace::Addr, found {:?}", self)
             }
         };
@@ -714,8 +802,10 @@ impl<'tcx> CPlace<'tcx> {
         assert!(lane_idx < lane_count);
 
         match self.inner {
-            CPlaceInner::Var(_, _) => unreachable!(),
-            CPlaceInner::VarPair(_, _, _) => unreachable!(),
+            CPlaceInner::Var(_, var) => {
+                CPlace { inner: CPlaceInner::VarLane(var, lane_idx), layout: lane_layout }
+            }
+            CPlaceInner::VarPair(_, _, _) | CPlaceInner::VarLane(..) => unreachable!(),
             CPlaceInner::Addr(ptr, None) => {
                 let field_offset = lane_layout.size * lane_idx;
                 let field_ptr = ptr.offset_i64(fx, i64::try_from(field_offset.bytes()).unwrap());
@@ -742,8 +832,10 @@ impl<'tcx> CPlace<'tcx> {
         );
 
         match self.inner {
-            CPlaceInner::Var(_, _) => unreachable!(),
-            CPlaceInner::VarPair(_, _, _) => unreachable!(),
+            CPlaceInner::Var(_, var) => {
+                CPlace { inner: CPlaceInner::VarLane(var, lane_idx), layout: lane_layout }
+            }
+            CPlaceInner::VarPair(_, _, _) | CPlaceInner::VarLane(..) => unreachable!(),
             CPlaceInner::Addr(ptr, None) => {
                 let field_offset = lane_layout.size * lane_idx;
                 let field_ptr = ptr.offset_i64(fx, i64::try_from(field_offset.bytes()).unwrap());
@@ -767,8 +859,15 @@ impl<'tcx> CPlace<'tcx> {
         assert_eq!(lane_layout, value.layout());
 
         match self.inner {
-            CPlaceInner::Var(_, _) => unreachable!(),
-            CPlaceInner::VarPair(_, _, _) => unreachable!(),
+            CPlaceInner::Var(_, _) => {
+                let spilled = CPlace::new_stack_slot(fx, layout);
+                let vector = self.to_cvalue(fx);
+                spilled.write_cvalue(fx, vector);
+                spilled.write_lane_dyn(fx, lane_idx, value);
+                let vector = spilled.to_cvalue(fx);
+                self.write_cvalue(fx, vector);
+            }
+            CPlaceInner::VarPair(_, _, _) | CPlaceInner::VarLane(..) => unreachable!(),
             CPlaceInner::Addr(ptr, None) => {
                 let lane_idx = clif_intcast(fx, lane_idx, fx.pointer_type, false);
                 let field_offset = fx
@@ -794,7 +893,8 @@ impl<'tcx> CPlace<'tcx> {
                     CPlaceInner::Addr(addr, None) => (elem_layout, addr),
                     CPlaceInner::Var(_, _)
                     | CPlaceInner::Addr(_, Some(_))
-                    | CPlaceInner::VarPair(_, _, _) => bug!("Can't index into {self:?}"),
+                    | CPlaceInner::VarPair(_, _, _)
+                    | CPlaceInner::VarLane(..) => bug!("Can't index into {self:?}"),
                 }
             }
             ty::Slice(elem_ty) => (fx.layout_of(*elem_ty), self.to_ptr_unsized().0),
