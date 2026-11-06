@@ -182,7 +182,11 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
                 a,
                 b,
                 ret,
-                &|fx, _lane_ty, _res_lane_ty, a_lane, b_lane| fx.bcx.ins().fmax(a_lane, b_lane),
+                &|fx, _lane_ty, _res_lane_ty, a_lane, b_lane| {
+                    // Unlike `fmax` this returns `b` for NaNs and when both inputs are zeros.
+                    let a_gt_b = fx.bcx.ins().fcmp(FloatCC::GreaterThan, a_lane, b_lane);
+                    fx.bcx.ins().select(a_gt_b, a_lane, b_lane)
+                },
             );
         }
 
@@ -195,7 +199,11 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
                 a,
                 b,
                 ret,
-                &|fx, _lane_ty, _res_lane_ty, a_lane, b_lane| fx.bcx.ins().fmin(a_lane, b_lane),
+                &|fx, _lane_ty, _res_lane_ty, a_lane, b_lane| {
+                    // Unlike `fmin` this returns `b` for NaNs and when both inputs are zeros.
+                    let a_lt_b = fx.bcx.ins().fcmp(FloatCC::LessThan, a_lane, b_lane);
+                    fx.bcx.ins().select(a_lt_b, a_lane, b_lane)
+                },
             );
         }
 
