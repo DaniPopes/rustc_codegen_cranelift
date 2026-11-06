@@ -1,0 +1,4 @@
+tagged "OptionU16" {
+  Some { _ "u16"; }
+  None
+}

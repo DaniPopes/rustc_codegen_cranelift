@@ -1,0 +1,6 @@
+@repr "i32"
+enum "EnumReprI32" {
+    "A"
+    "B"
+    "C"
+}

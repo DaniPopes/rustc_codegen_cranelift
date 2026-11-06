@@ -1,0 +1,6 @@
+@repr "u16"
+enum "EnumReprU16" {
+    "A"
+    "B"
+    "C"
+}
