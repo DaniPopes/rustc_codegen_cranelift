@@ -66,6 +66,36 @@ const NO_SYSROOT_SUITE: &[TestCase] = &[
         "example/mini_core_hello_world.rs",
         &["abc", "bcd"],
     ),
+    // Mach-O only supports 255 sections, so data objects that share a custom section have to be
+    // emitted into one section.
+    TestCase::custom("aot.macho_many_custom_sections", &|runner| {
+        let mut source = String::from(
+            "#![feature(no_core, lang_items)]\n\
+             #![allow(internal_features)]\n\
+             #![no_core]\n\
+             #[lang = \"pointee_sized\"] trait PointeeSized {}\n\
+             #[lang = \"meta_sized\"] trait MetaSized: PointeeSized {}\n\
+             #[lang = \"sized\"] trait Sized: MetaSized {}\n\
+             #[lang = \"sync\"] unsafe trait Sync {}\n\
+             #[lang = \"drop_glue\"] unsafe fn drop_glue<T: ?Sized>(_: &mut T) {}\n\
+             unsafe impl Sync for u8 {}\n",
+        );
+        for i in 0..300 {
+            source.push_str(&format!(
+                "#[used] #[unsafe(link_section = \"__DATA,__mod_init_func,mod_init_funcs\")] \
+                 static S{i}: u8 = 0;\n"
+            ));
+        }
+        let out_dir = BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs);
+        let source_path = out_dir.join("macho_many_custom_sections.rs");
+        fs::write(&source_path, source).unwrap();
+
+        let cmd = runner.rustc_command_for_target(
+            "aarch64-apple-darwin",
+            [source_path.as_os_str(), OsStr::new("--crate-type=lib"), OsStr::new("--emit=obj")],
+        );
+        spawn_and_wait(cmd);
+    }),
 ];
 
 const BASE_SYSROOT_SUITE: &[TestCase] = &[
@@ -146,6 +176,37 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         }
     }),
     TestCase::build_bin_and_run("aot.issue-72793", "example/issue-72793.rs", &[]),
+    // Call every function of a crate built with one backend from a crate built with the other one.
+    TestCase::custom("aot.mixed_backend_abi", &|runner| {
+        let (arch, _) = runner.target_compiler.target.split_once('-').unwrap();
+        if !matches!(arch, "x86_64" | "aarch64") {
+            eprintln!("Skipping `mixed_backend_abi` test: unsupported target");
+            return;
+        }
+
+        let llvm = "-Zcodegen-backend=llvm";
+        for (name, callee_flag, caller_flag) in
+            [("llvm", Some(llvm), None), ("clif", None, Some(llvm))]
+        {
+            let callee = format!("callee_{name}");
+            let mut args =
+                vec!["example/mixed-backend-abi-callee.rs", "--crate-type=rlib", "--crate-name"];
+            args.push(&callee);
+            args.extend(callee_flag);
+            runner.run_rustc(args);
+
+            let caller = format!("mixed_backend_abi_{name}");
+            let callee_rlib =
+                BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join(format!("lib{callee}.rlib"));
+            let callee_extern = format!("callee={}", callee_rlib.display());
+            let mut args = vec!["example/mixed-backend-abi.rs", "--crate-name"];
+            args.push(&caller);
+            args.extend(["--extern", &callee_extern]);
+            args.extend(caller_flag);
+            runner.run_rustc(args);
+            runner.run_out_command(&caller, &[]);
+        }
+    }),
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
     TestCase::build_bin_and_run("aot.raw-dylib", "example/raw-dylib.rs", &[]),
@@ -624,6 +685,15 @@ impl<'a> TestRunner<'a> {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.rustc_command_for_target(&self.target_compiler.target, args)
+    }
+
+    #[must_use]
+    fn rustc_command_for_target<I, S>(&self, target: &str, args: I) -> Command
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let mut cmd = Command::new(&self.target_compiler.rustc);
         cmd.args(&self.target_compiler.rustflags);
         cmd.arg("-L");
@@ -632,7 +702,7 @@ impl<'a> TestRunner<'a> {
         cmd.arg(BUILD_EXAMPLE_OUT_DIR.to_path(&self.dirs));
         cmd.arg("-Cdebuginfo=2");
         cmd.arg("--target");
-        cmd.arg(&self.target_compiler.target);
+        cmd.arg(target);
         if !self.panic_unwind_support {
             cmd.arg("-Cpanic=abort");
         }
