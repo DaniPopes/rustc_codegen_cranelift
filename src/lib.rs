@@ -131,11 +131,17 @@ impl CodegenBackend for CraneliftCodegenBackend {
     fn init(&mut self, sess: &EarlySession) -> CodegenBackendInit {
         use rustc_session::config::{InstrumentCoverage, LtoCli};
 
-        match (sess.target.requires_lto, sess.early_lto()) {
-            (true, _) | (false, LtoCli::Yes | LtoCli::Fat | LtoCli::NoParam | LtoCli::Thin) => {
-                sess.dcx().fatal("LTO is not supported by rustc_codegen_cranelift")
-            }
-            (false, LtoCli::Unspecified | LtoCli::No) => {}
+        if sess.target.requires_lto {
+            sess.dcx().fatal("targets requiring LTO are not supported by rustc_codegen_cranelift")
+        }
+
+        // GNU ld produces invalid executables when linking all objects of the sysroot.
+        if sess.early_lto() != LtoCli::Unspecified
+            && sess.early_lto() != LtoCli::No
+            && sess.target.is_like_windows
+            && !sess.target.is_like_msvc
+        {
+            sess.dcx().fatal("LTO is not supported by rustc_codegen_cranelift on windows-gnu");
         }
 
         if sess.opts.cg.instrument_coverage() != InstrumentCoverage::No {
@@ -158,7 +164,9 @@ impl CodegenBackend for CraneliftCodegenBackend {
             // FIXME workaround for rust-lang/rustc_codegen_cranelift#1717
             replaced_intrinsics: vec![sym::fma],
             fallback_intrinsics: vec![sym::type_id_eq],
-            thin_lto_supported: false,
+            // Without explicit `-Clto=thin`, reporting support would make rustc enable local thin
+            // LTO for all optimized builds, which would only add overhead.
+            thin_lto_supported: sess.early_lto() == LtoCli::Thin,
         }
     }
 

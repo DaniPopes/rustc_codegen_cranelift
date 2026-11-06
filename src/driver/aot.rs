@@ -1,8 +1,7 @@
 //! The AOT driver uses [`cranelift_object`] to write object files suitable for linking into a
 //! standalone executable.
 
-use std::convert::Infallible;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::BufWriter;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,6 +27,7 @@ use rustc_span::Symbol;
 
 use crate::base::CodegenedFunction;
 use crate::debuginfo::TypeDebugContext;
+use crate::driver::lto::{self, ModuleBuffer};
 use crate::global_asm::{GlobalAsmConfig, GlobalAsmContext};
 use crate::prelude::*;
 use crate::unwind_module::UnwindModule;
@@ -39,6 +39,7 @@ pub(crate) struct AotModule {
     debug_context: Option<DebugContext>,
     codegened_functions: Vec<CodegenedFunction>,
     global_asm: String,
+    global_asm_object: Option<PathBuf>,
 }
 
 fn make_module(tcx: TyCtxt<'_>, cgu_name: &str) -> AotModule {
@@ -73,6 +74,7 @@ fn make_module(tcx: TyCtxt<'_>, cgu_name: &str) -> AotModule {
     let debug_context = DebugContext::new(tcx, module.isa(), false, cgu_name);
     let codegened_functions = vec![];
     let global_asm = String::new();
+    let global_asm_object = None;
 
     AotModule {
         producer,
@@ -81,19 +83,15 @@ fn make_module(tcx: TyCtxt<'_>, cgu_name: &str) -> AotModule {
         debug_context,
         codegened_functions,
         global_asm,
+        global_asm_object,
     }
 }
 
-fn emit_module(
-    output_filenames: &OutputFilenames,
-    prof: &SelfProfilerRef,
+fn finish_object(
     module: UnwindModule<ObjectModule>,
     debug: Option<DebugContext>,
-    kind: ModuleKind,
-    name: String,
-    global_asm_object: Option<PathBuf>,
     producer_str: &str,
-) -> Result<CompiledModule, String> {
+) -> object::write::Object<'static> {
     let mut product = module.finish();
 
     if let Some(mut debug) = debug {
@@ -112,6 +110,17 @@ fn emit_module(
         product.object.set_section_data(comment_section, producer, 1);
     }
 
+    product.object
+}
+
+fn emit_module(
+    output_filenames: &OutputFilenames,
+    prof: &SelfProfilerRef,
+    object: object::write::Object<'static>,
+    kind: ModuleKind,
+    name: String,
+    global_asm_object: Option<PathBuf>,
+) -> Result<CompiledModule, String> {
     let tmp_file = output_filenames.temp_path_for_cgu(OutputType::Object, &name);
     let file = match File::create(&tmp_file) {
         Ok(file) => file,
@@ -119,7 +128,7 @@ fn emit_module(
     };
 
     let mut file = BufWriter::new(file);
-    if let Err(err) = product.object.write_stream(&mut file) {
+    if let Err(err) = object.write_stream(&mut file) {
         return Err(format!("error writing object file: {}", err));
     }
     let file = match file.into_inner() {
@@ -206,22 +215,21 @@ fn codegen_cgu(tcx: TyCtxt<'_>, cgu_name: Symbol) -> AotModule {
     module
 }
 
-fn compile_cgu(
+fn compile_functions(
     prof: &SelfProfilerRef,
     dcx: DiagCtxtHandle<'_>,
     output_filenames: &OutputFilenames,
     should_write_ir: bool,
-    mut aot_module: AotModule,
-    cgu_name: String,
-    kind: ModuleKind,
-) -> Result<CompiledModule, String> {
-    prof.generic_activity_with_arg("compile functions", &*cgu_name).run(|| {
+    aot_module: &mut AotModule,
+    cgu_name: &str,
+) -> Result<(), String> {
+    prof.generic_activity_with_arg("compile functions", cgu_name).run(|| {
         cranelift_codegen::timing::set_thread_profiler(Box::new(super::MeasuremeProfiler(
             prof.clone(),
         )));
 
         let mut cached_context = Context::new();
-        for codegened_func in aot_module.codegened_functions {
+        for codegened_func in std::mem::take(&mut aot_module.codegened_functions) {
             crate::base::compile_fn(
                 &prof,
                 dcx,
@@ -236,32 +244,40 @@ fn compile_cgu(
         }
     });
 
-    let global_asm_object_file =
-        prof.generic_activity_with_arg("compile assembly", &*cgu_name).run(|| {
+    aot_module.global_asm_object =
+        prof.generic_activity_with_arg("compile assembly", cgu_name).run(|| {
             if aot_module.global_asm.is_empty() {
                 return Ok::<_, String>(None);
             }
 
-            let global_asm_object_file = output_filenames.temp_path_ext_for_cgu("asm.o", &cgu_name);
+            let global_asm_object_file = output_filenames.temp_path_ext_for_cgu("asm.o", cgu_name);
             crate::global_asm::compile_global_asm(
                 &aot_module.global_asm_config,
-                aot_module.global_asm,
+                std::mem::take(&mut aot_module.global_asm),
                 &global_asm_object_file,
             )?;
 
             Ok(Some(global_asm_object_file))
         })?;
 
+    Ok(())
+}
+
+fn compile_cgu(
+    prof: &SelfProfilerRef,
+    output_filenames: &OutputFilenames,
+    aot_module: AotModule,
+    cgu_name: String,
+    kind: ModuleKind,
+) -> Result<CompiledModule, String> {
     prof.generic_activity_with_arg("write object file", &*cgu_name).run(|| {
         emit_module(
             output_filenames,
             prof,
-            aot_module.module,
-            aot_module.debug_context,
+            finish_object(aot_module.module, aot_module.debug_context, &aot_module.producer),
             kind,
             cgu_name.clone(),
-            global_asm_object_file,
-            &aot_module.producer,
+            aot_module.global_asm_object,
         )
     })
 }
@@ -314,9 +330,9 @@ impl ExtraBackendMethods for AotDriver {
 
 impl WriteBackendMethods for AotDriver {
     type Module = AotModule;
-    type ModuleBuffer = Infallible;
+    type ModuleBuffer = ModuleBuffer;
     type TargetMachine = ();
-    type ThinData = Infallible;
+    type ThinData = ();
 
     fn target_machine_factory(
         &self,
@@ -327,46 +343,66 @@ impl WriteBackendMethods for AotDriver {
     }
 
     fn optimize_and_codegen_fat_lto(
-        _sess: &Session,
-        _cgcx: &CodegenContext,
-        _shared_emitter: &SharedEmitter,
+        sess: &Session,
+        cgcx: &CodegenContext,
+        shared_emitter: &SharedEmitter,
         _tm_factory: TargetMachineFactoryFn<Self>,
         _exported_symbols_for_lto: &[String],
-        _each_linked_rlib_for_lto: &[PathBuf],
-        _modules: Vec<FatLtoInput<Self>>,
+        each_linked_rlib_for_lto: &[PathBuf],
+        modules: Vec<FatLtoInput<Self>>,
     ) -> CompiledModule {
-        unreachable!()
+        let dcx = DiagCtxt::new(Box::new(shared_emitter.clone()));
+        lto::optimize_and_codegen_fat_lto(
+            sess,
+            cgcx,
+            dcx.handle(),
+            each_linked_rlib_for_lto,
+            modules,
+        )
     }
 
     fn run_thin_lto(
-        _cgcx: &CodegenContext,
+        cgcx: &CodegenContext,
         _prof: &SelfProfilerRef,
         _incr_comp_session: Option<&BorrowedIncrCompSession>,
-        _dcx: rustc_errors::DiagCtxtHandle<'_>,
+        dcx: rustc_errors::DiagCtxtHandle<'_>,
         _exported_symbols_for_lto: &[String],
-        _each_linked_rlib_for_lto: &[PathBuf],
-        _modules: Vec<ThinLtoInput<Self>>,
+        each_linked_rlib_for_lto: &[PathBuf],
+        modules: Vec<ThinLtoInput<Self>>,
     ) -> (Vec<ThinModule<Self>>, Vec<WorkProduct>) {
-        unreachable!()
+        lto::run_thin_lto(cgcx, dcx, each_linked_rlib_for_lto, modules)
     }
 
     fn optimize(
-        _cgcx: &CodegenContext,
-        _prof: &SelfProfilerRef,
-        _shared_emitter: &SharedEmitter,
-        _module: &mut ModuleCodegen<Self::Module>,
-        _config: &ModuleConfig,
+        cgcx: &CodegenContext,
+        prof: &SelfProfilerRef,
+        shared_emitter: &SharedEmitter,
+        module: &mut ModuleCodegen<Self::Module>,
+        config: &ModuleConfig,
     ) {
+        // Compile the functions here, rather than in `codegen`, so that LTO can serialize the
+        // finished module.
+        let dcx = DiagCtxt::new(Box::new(shared_emitter.clone()));
+        compile_functions(
+            prof,
+            dcx.handle(),
+            &cgcx.output_filenames,
+            config.emit_ir,
+            &mut module.module_llvm,
+            &module.name,
+        )
+        .unwrap_or_else(|err| dcx.handle().fatal(err));
     }
 
     fn optimize_and_codegen_thin(
-        _cgcx: &CodegenContext,
+        cgcx: &CodegenContext,
         _prof: &SelfProfilerRef,
-        _shared_emitter: &SharedEmitter,
+        shared_emitter: &SharedEmitter,
         _tm_factory: TargetMachineFactoryFn<Self>,
-        _thin: ThinModule<Self>,
+        thin: ThinModule<Self>,
     ) -> CompiledModule {
-        unreachable!()
+        let dcx = DiagCtxt::new(Box::new(shared_emitter.clone()));
+        lto::optimize_and_codegen_thin(cgcx, dcx.handle(), thin)
     }
 
     fn codegen(
@@ -374,22 +410,22 @@ impl WriteBackendMethods for AotDriver {
         prof: &SelfProfilerRef,
         shared_emitter: &SharedEmitter,
         module: ModuleCodegen<Self::Module>,
-        config: &ModuleConfig,
+        _config: &ModuleConfig,
     ) -> CompiledModule {
         let dcx = DiagCtxt::new(Box::new(shared_emitter.clone()));
-        compile_cgu(
-            prof,
-            dcx.handle(),
-            &cgcx.output_filenames,
-            config.emit_ir,
-            module.module_llvm,
-            module.name,
-            module.kind,
-        )
-        .unwrap_or_else(|err| dcx.handle().fatal(err))
+        compile_cgu(prof, &cgcx.output_filenames, module.module_llvm, module.name, module.kind)
+            .unwrap_or_else(|err| dcx.handle().fatal(err))
     }
 
-    fn serialize_module(_module: Self::Module, _is_thin: bool) -> Self::ModuleBuffer {
-        unreachable!()
+    fn serialize_module(module: Self::Module, _is_thin: bool) -> Self::ModuleBuffer {
+        let object = finish_object(module.module, module.debug_context, &module.producer)
+            .write()
+            .expect("failed to serialize object file");
+        let global_asm_object = module.global_asm_object.map(|path| {
+            let global_asm_object = fs::read(&path).expect("failed to read global asm object file");
+            drop(fs::remove_file(path));
+            global_asm_object
+        });
+        ModuleBuffer::new(&object, global_asm_object.as_deref().unwrap_or_default())
     }
 }

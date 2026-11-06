@@ -145,6 +145,29 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             );
         }
     }),
+    TestCase::custom("aot.lto", &|runner| {
+        if runner.target_compiler.target.contains("windows-gnu") {
+            return;
+        }
+        runner.run_rustc([
+            "example/lto-lib.rs",
+            "--crate-type",
+            "rlib",
+            "--crate-name",
+            "lto_lib",
+            "-Copt-level=1",
+        ]);
+        // Fat LTO is not supported on MSVC.
+        let ltos: &[&str] = if runner.target_compiler.target.contains("windows-msvc") {
+            &["thin"]
+        } else {
+            &["thin", "fat"]
+        };
+        for lto in ltos {
+            runner.run_rustc(["example/lto-bin.rs", "-Copt-level=1", &format!("-Clto={lto}")]);
+            runner.run_out_command("lto-bin", &[]);
+        }
+    }),
     TestCase::build_bin_and_run("aot.issue-72793", "example/issue-72793.rs", &[]),
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
