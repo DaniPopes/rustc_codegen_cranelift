@@ -20,7 +20,7 @@ pub(crate) enum CInlineAsmOperand<'tcx> {
         reg: InlineAsmRegOrRegClass,
         value: Value,
     },
-    /// Like `In`, for values without a Cranelift SSA type, such as vectors wider than 128 bits.
+    /// Like `In`, for vectors, which may be wider than any Cranelift SSA type.
     InMem {
         reg: InlineAsmRegOrRegClass,
         value: CValue<'tcx>,
@@ -99,7 +99,7 @@ pub(crate) fn codegen_inline_asm_terminator<'tcx>(
                     any_input_uninhabited = true;
                     None
                 } else {
-                    if value.layout().ty.is_simd() && value.layout().size.bytes() > 16 {
+                    if value.layout().ty.is_simd() {
                         Some(CInlineAsmOperand::InMem { reg, value })
                     } else {
                         let value = value.load_scalar(fx);
@@ -986,15 +986,10 @@ fn call_inline_asm<'tcx>(
 
     for (offset, place) in outputs {
         let slot = stack_slot.offset(fx, i32::try_from(offset.bytes()).unwrap().into());
-        let value = if place.layout().ty.is_simd() && place.layout().size.bytes() > 16 {
+        let value = if place.layout().ty.is_simd() {
             CValue::by_ref(slot, place.layout())
         } else {
-            let ty = if place.layout().ty.is_simd() {
-                let (lane_count, lane_type) = place.layout().ty.simd_size_and_type(fx.tcx);
-                asm_clif_type(fx, lane_type).unwrap().by(lane_count.try_into().unwrap()).unwrap()
-            } else {
-                asm_clif_type(fx, place.layout().ty).unwrap()
-            };
+            let ty = asm_clif_type(fx, place.layout().ty).unwrap();
             CValue::by_val(slot.load(fx, ty, MemFlagsData::trusted()), place.layout())
         };
         place.write_cvalue(fx, value);

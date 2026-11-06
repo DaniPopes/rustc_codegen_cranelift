@@ -491,35 +491,30 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
                 report_simd_type_validation_error(fx, intrinsic, span, a.layout().ty);
                 return;
             }
-            assert_eq!(a.layout(), b.layout());
-            assert_eq!(a.layout(), shift.layout());
-            assert_eq!(a.layout(), ret.layout());
 
-            let (lane_count, lane_ty) = a.layout().ty.simd_size_and_type(fx.tcx);
-            let res_lane_layout = fx.layout_of(lane_ty);
-
-            for lane in 0..lane_count {
-                let a_lane = a.value_lane(fx, lane).load_scalar(fx);
-                let b_lane = b.value_lane(fx, lane).load_scalar(fx);
-                let shift_lane = shift.value_lane(fx, lane).load_scalar(fx);
-
-                // Cranelift masks shift amounts to the lane width, so `!shift` is `BITS - 1 - shift`.
-                // Shifting the other half by one first avoids a shift by `BITS` when `shift` is 0.
-                let inv_shift_lane = fx.bcx.ins().bnot(shift_lane);
-                let (from_a, from_b) = if intrinsic == sym::simd_funnel_shl {
-                    let hi = fx.bcx.ins().ishl(a_lane, shift_lane);
-                    let lo = fx.bcx.ins().ushr_imm(b_lane, 1);
-                    (hi, fx.bcx.ins().ushr(lo, inv_shift_lane))
-                } else {
-                    let hi = fx.bcx.ins().ishl_imm(a_lane, 1);
-                    let lo = fx.bcx.ins().ushr(b_lane, shift_lane);
-                    (fx.bcx.ins().ishl(hi, inv_shift_lane), lo)
-                };
-                let res_lane = fx.bcx.ins().bor(from_a, from_b);
-                let res_lane = CValue::by_val(res_lane, res_lane_layout);
-
-                ret.place_lane(fx, lane).write_cvalue(fx, res_lane);
-            }
+            simd_trio_for_each_lane(
+                fx,
+                a,
+                b,
+                shift,
+                ret,
+                &|fx, _lane_ty, _ret_lane_ty, a_lane, b_lane, shift_lane| {
+                    // Cranelift masks shift amounts to the lane width, so `!shift` is
+                    // `BITS - 1 - shift`. Shifting the other half by one first avoids a shift by
+                    // `BITS` when `shift` is 0.
+                    let inv_shift_lane = fx.bcx.ins().bnot(shift_lane);
+                    let (from_a, from_b) = if intrinsic == sym::simd_funnel_shl {
+                        let from_a = fx.bcx.ins().ishl(a_lane, shift_lane);
+                        let b_lane = fx.bcx.ins().ushr_imm(b_lane, 1);
+                        (from_a, fx.bcx.ins().ushr(b_lane, inv_shift_lane))
+                    } else {
+                        let a_lane = fx.bcx.ins().ishl_imm(a_lane, 1);
+                        let from_b = fx.bcx.ins().ushr(b_lane, shift_lane);
+                        (fx.bcx.ins().ishl(a_lane, inv_shift_lane), from_b)
+                    };
+                    fx.bcx.ins().bor(from_a, from_b)
+                },
+            );
         }
 
         // FIXME: simd_relaxed_fma doesn't relax to non-fused multiply-add
