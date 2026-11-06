@@ -182,6 +182,10 @@
 'RandomMix4::conv_c::repr_c::cgclif_calls_rustc'.busted = "check"
 'RandomMix5::conv_c::repr_rust::rustc_calls_cgclif'.busted = "run"
 'RandomMix5::conv_c::repr_c::rustc_calls_cgclif'.busted = "run"
+# The result of these depends on stack contents that vary between runs: they pass, fail the check
+# or crash.
+'RandomMix5::conv_c::repr_rust::cgclif_calls_rustc'.random = true
+'RandomMix5::conv_c::repr_c::cgclif_calls_rustc'.random = true
 'RandomMix6::conv_c'.busted = "run"
 'RandomMix7::conv_c::repr_rust::rustc_calls_cgclif'.busted = "run"
 'RandomMix7::conv_c::repr_c::rustc_calls_cgclif'.busted = "run"
