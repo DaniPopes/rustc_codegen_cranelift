@@ -9,6 +9,7 @@ use crate::build_sysroot::{SysrootConfig, SysrootKind};
 use crate::utils::Compiler;
 
 mod abi_cafe;
+mod abi_cafe_gen;
 mod bench;
 mod build_backend;
 mod build_sysroot;

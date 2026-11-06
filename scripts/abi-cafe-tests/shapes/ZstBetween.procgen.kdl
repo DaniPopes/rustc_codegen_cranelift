@@ -1,0 +1,8 @@
+struct "ZstBetween" {
+    _ "u128"
+    _ "EmptyStruct"
+    _ "u8"
+}
+
+struct "EmptyStruct" {
+}

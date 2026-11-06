@@ -1,0 +1,6 @@
+@align 16
+struct "Align16U64x3" {
+    _ "u64"
+    _ "u64"
+    _ "u64"
+}

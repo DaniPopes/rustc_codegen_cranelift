@@ -1,0 +1,9 @@
+union "UnionF32x2U64" {
+    _ "F32x2"
+    _ "u64"
+}
+
+struct "F32x2" {
+    _ "f32"
+    _ "f32"
+}
