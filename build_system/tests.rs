@@ -344,7 +344,7 @@ const EXTENDED_SYSROOT_SUITE: &[TestCase] = &[
         let (arch, _) = target.split_once('-').unwrap();
 
         // FIXME: Add support for remaining architectures.
-        if !["aarch64"].contains(&arch) {
+        if !["aarch64", "x86_64"].contains(&arch) {
             eprintln!("Skipping `stdarch-core` tests: unsupported target");
             return;
         }
