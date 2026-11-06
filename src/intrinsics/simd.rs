@@ -505,10 +505,10 @@ pub(super) fn codegen_simd_intrinsic_call<'tcx>(
                     let inv_shift_lane = fx.bcx.ins().bnot(shift_lane);
                     let (from_a, from_b) = if intrinsic == sym::simd_funnel_shl {
                         let from_a = fx.bcx.ins().ishl(a_lane, shift_lane);
-                        let b_lane = fx.bcx.ins().ushr_imm(b_lane, 1);
+                        let b_lane = fx.bcx.ins().ushr_imm_u(b_lane, 1);
                         (from_a, fx.bcx.ins().ushr(b_lane, inv_shift_lane))
                     } else {
-                        let a_lane = fx.bcx.ins().ishl_imm(a_lane, 1);
+                        let a_lane = fx.bcx.ins().ishl_imm_u(a_lane, 1);
                         let from_b = fx.bcx.ins().ushr(b_lane, shift_lane);
                         (fx.bcx.ins().ishl(a_lane, inv_shift_lane), from_b)
                     };
