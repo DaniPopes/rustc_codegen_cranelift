@@ -1,8 +1,12 @@
 name: FreeBSD
 
 on:
+  # Branches with a pull request get CI from `pull_request`; also running it on `push` would test
+  # every pull request head twice. Run other branches by hand.
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch: {}
 
 permissions: {}
 

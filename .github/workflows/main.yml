@@ -1,8 +1,12 @@
 name: CI
 
 on:
-  - push
-  - pull_request
+  # Branches with a pull request get CI from `pull_request`; also running it on `push` would test
+  # every pull request head twice. Run other branches by hand.
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
 
 permissions: {}
 
@@ -55,7 +59,7 @@ jobs:
 
   test:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.timeout || 60 }}
 
     env:
       CG_CLIF_EXPENSIVE_CHECKS: 1
@@ -73,6 +77,8 @@ jobs:
           - os: macos-15-intel
             env:
               TARGET_TUPLE: x86_64-apple-darwin
+            # Takes 33-38 minutes, but some Intel runners are uniformly about 1.6x slower.
+            timeout: 90
           - os: macos-latest
             env:
               TARGET_TUPLE: aarch64-apple-darwin

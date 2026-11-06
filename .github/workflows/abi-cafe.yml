@@ -1,8 +1,12 @@
 name: Abi-cafe
 
 on:
-  - push
-  - pull_request
+  # Branches with a pull request get CI from `pull_request`; also running it on `push` would test
+  # every pull request head twice. Run other branches by hand.
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
 
 permissions: {}
 
