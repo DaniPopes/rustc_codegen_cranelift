@@ -223,10 +223,12 @@ struct U8X16([u8; 16]);
 #[derive(Copy, Clone)]
 struct U8X8([u8; 8]);
 
+#[cfg_attr(target_endian = "big", allow(dead_code))]
 #[repr(simd)]
 #[derive(Copy, Clone)]
 struct U32X4([u32; 4]);
 
+#[cfg_attr(target_endian = "big", allow(dead_code))]
 #[repr(simd)]
 #[derive(Copy, Clone)]
 struct F32X4([f32; 4]);
