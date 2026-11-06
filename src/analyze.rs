@@ -18,7 +18,7 @@ impl SsaKind {
         self == SsaKind::MaybeSsa
             && (fx.clif_type(ty).is_some()
                 || fx.clif_pair_type(ty).is_some()
-                || simd_ssa_type(fx.tcx, fx.layout_of(ty)).is_some())
+                || simd_ssa_type(fx, fx.layout_of(ty)).is_some())
     }
 }
 
@@ -27,21 +27,25 @@ pub(crate) fn ssa_clif_type<'tcx>(
     fx: &FunctionCx<'_, '_, 'tcx>,
     layout: TyAndLayout<'tcx>,
 ) -> Option<Type> {
-    fx.clif_type(layout.ty).or_else(|| simd_ssa_type(fx.tcx, layout))
+    fx.clif_type(layout.ty).or_else(|| simd_ssa_type(fx, layout))
 }
 
 /// The Cranelift vector type used to hold a SIMD value in an SSA variable, if it can be held in
 /// one. Wider vectors and vectors Cranelift does not fully support stay in memory.
-fn simd_ssa_type<'tcx>(tcx: TyCtxt<'tcx>, layout: TyAndLayout<'tcx>) -> Option<Type> {
+fn simd_ssa_type<'tcx>(fx: &FunctionCx<'_, '_, 'tcx>, layout: TyAndLayout<'tcx>) -> Option<Type> {
+    let tcx = fx.tcx;
     let BackendRepr::SimdVector { element, count } = layout.backend_repr else {
         return None;
     };
-    // Only single-field structs: a SIMD type wrapping an array, or a type wrapping a vector.
+    // Only single-field structs: a SIMD type wrapping an array, or a type wrapping such a type.
     // Fields of these are handled by `CPlace::place_field` and `CValue::value_field`.
     let ty::Adt(adt, _) = layout.ty.kind() else {
         return None;
     };
     if !adt.is_struct() || adt.non_enum_variant().fields.len() != 1 {
+        return None;
+    }
+    if !layout.ty.is_simd() && simd_ssa_type(fx, layout.field(fx, 0)).is_none() {
         return None;
     }
     // Cranelift orders the lanes of vectors in memory by the target endianness.

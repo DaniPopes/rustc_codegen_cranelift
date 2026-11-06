@@ -236,6 +236,12 @@ struct F32X4([f32; 4]);
 #[derive(Copy, Clone)]
 struct WrappedU8X16(U8X16);
 
+#[derive(Copy, Clone)]
+struct WrappedWithZstU8X16(U8X16, ());
+
+#[derive(Copy, Clone)]
+struct NestedWrappedU8X16(WrappedWithZstU8X16);
+
 struct DropWrappedU8X16(U8X16);
 
 static DROPPED_LANE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -322,6 +328,10 @@ fn test_simd_values() {
         let wrapped = WrappedU8X16(w);
         let inner = black_box(wrapped).0;
         assert_eq!(std::mem::transmute::<_, [u8; 16]>(inner), expected_w);
+
+        // Wrappers that are not themselves vectors, but have the layout of one.
+        let nested = black_box(NestedWrappedU8X16(WrappedWithZstU8X16(w, ())));
+        assert_eq!(std::mem::transmute::<_, [u8; 16]>(nested.0.0), expected_w);
 
         // A value with drop glue takes its address when dropped.
         let extracted = simd_value_with_drop_glue(DropWrappedU8X16(w), true);
