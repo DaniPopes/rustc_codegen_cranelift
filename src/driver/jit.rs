@@ -14,6 +14,7 @@ use rustc_session::config::OutputFilenames;
 use rustc_span::sym;
 
 use crate::debuginfo::TypeDebugContext;
+use crate::llvm_fallback::LlvmWrappers;
 use crate::prelude::*;
 use crate::unwind_module::UnwindModule;
 
@@ -156,6 +157,7 @@ fn codegen_and_compile_fn<'tcx>(
             cached_func,
             module,
             instance,
+            false,
         );
 
         let mut global_asm = String::new();
@@ -168,6 +170,7 @@ fn codegen_and_compile_fn<'tcx>(
             module,
             debug_context.as_deref_mut(),
             &mut global_asm,
+            &mut LlvmWrappers::default(),
             codegened_func,
         );
         if !global_asm.is_empty() {

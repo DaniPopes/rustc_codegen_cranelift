@@ -1,6 +1,6 @@
 //! Handling of `static`s, `const`s and promoted allocations
 
-use std::cmp::Ordering;
+use std::mem;
 
 use cranelift_module::*;
 use rustc_const_eval::interpret::CTFE_ALLOC_SALT;
@@ -513,54 +513,88 @@ pub(crate) fn mir_operand_get_const_val<'tcx>(
         // inside a temporary before being passed to the intrinsic requiring the const argument.
         // This code tries to find a single constant defining definition of the referenced local.
         Operand::Copy(place) | Operand::Move(place) => {
-            if !place.projection.is_empty() {
+            if !place.projection.is_empty() || fx.mir.args_iter().any(|arg| arg == place.local) {
                 return None;
             }
             let mut computed_scalar_int = None;
+            let mut assigned = false;
             for bb_data in fx.mir.basic_blocks.iter() {
                 for stmt in &bb_data.statements {
+                    // The local could be modified through a pointer.
+                    if let StatementKind::Assign(local_and_rvalue) = &stmt.kind
+                        && let Rvalue::Ref(_, _, borrowed) | Rvalue::RawPtr(_, borrowed) =
+                            &local_and_rvalue.1
+                        && borrowed.local == place.local
+                    {
+                        return None;
+                    }
                     match &stmt.kind {
                         StatementKind::Assign(local_and_rvalue) if &local_and_rvalue.0 == place => {
                             match &local_and_rvalue.1 {
-                                Rvalue::Cast(
-                                    CastKind::IntToInt
-                                    | CastKind::FloatToFloat
-                                    | CastKind::FloatToInt
-                                    | CastKind::IntToFloat
-                                    | CastKind::FnPtrToPtr
-                                    | CastKind::PtrToPtr,
-                                    operand,
-                                    ty,
-                                ) => {
-                                    if computed_scalar_int.is_some() {
+                                Rvalue::Cast(CastKind::IntToInt, operand, ty) => {
+                                    if mem::replace(&mut assigned, true) {
                                         return None; // local assigned twice
                                     }
                                     if !matches!(ty.kind(), ty::Uint(_) | ty::Int(_)) {
                                         return None;
                                     }
                                     let scalar_int = mir_operand_get_const_val(fx, operand)?;
-                                    let scalar_int =
-                                        match fx.layout_of(*ty).size.cmp(&scalar_int.size()) {
-                                            Ordering::Equal => scalar_int,
-                                            Ordering::Less => match ty.kind() {
-                                                ty::Uint(_) => ScalarInt::try_from_uint(
-                                                    scalar_int.to_uint(scalar_int.size()),
-                                                    fx.layout_of(*ty).size,
-                                                )
-                                                .unwrap(),
-                                                ty::Int(_) => ScalarInt::try_from_int(
-                                                    scalar_int.to_int(scalar_int.size()),
-                                                    fx.layout_of(*ty).size,
-                                                )
-                                                .unwrap(),
-                                                _ => unreachable!(),
-                                            },
-                                            Ordering::Greater => return None,
+                                    // Sign extend if the source is signed, zero extend otherwise
+                                    // and truncate to the size of the target.
+                                    let bits =
+                                        match fx.monomorphize(operand.ty(fx.mir, fx.tcx)).kind() {
+                                            ty::Int(_) => {
+                                                scalar_int.to_int(scalar_int.size()).cast_unsigned()
+                                            }
+                                            _ => scalar_int.to_uint(scalar_int.size()),
                                         };
-                                    computed_scalar_int = Some(scalar_int);
+                                    let size = fx.layout_of(*ty).size;
+                                    computed_scalar_int = Some(
+                                        ScalarInt::try_from_uint(size.truncate(bits), size)
+                                            .unwrap(),
+                                    );
                                 }
                                 Rvalue::Use(operand, _) => {
+                                    if mem::replace(&mut assigned, true) {
+                                        return None; // local assigned twice
+                                    }
                                     computed_scalar_int = mir_operand_get_const_val(fx, operand)
+                                }
+                                Rvalue::BinaryOp(bin_op, operands) => {
+                                    if mem::replace(&mut assigned, true) {
+                                        return None; // local assigned twice
+                                    }
+                                    let (lhs, rhs) = &**operands;
+                                    let lhs_ty = fx.monomorphize(lhs.ty(fx.mir, fx.tcx));
+                                    if !matches!(lhs_ty.kind(), ty::Uint(_) | ty::Int(_)) {
+                                        return None;
+                                    }
+                                    let lhs = mir_operand_get_const_val(fx, lhs)?;
+                                    let rhs = mir_operand_get_const_val(fx, rhs)?;
+                                    let size = fx.layout_of(lhs_ty).size;
+                                    let (lhs_bits, rhs_bits) =
+                                        (lhs.to_uint(lhs.size()), rhs.to_uint(rhs.size()));
+                                    let bits = match bin_op {
+                                        BinOp::Add | BinOp::AddUnchecked => {
+                                            lhs_bits.wrapping_add(rhs_bits)
+                                        }
+                                        BinOp::Sub | BinOp::SubUnchecked => {
+                                            lhs_bits.wrapping_sub(rhs_bits)
+                                        }
+                                        BinOp::Mul | BinOp::MulUnchecked => {
+                                            lhs_bits.wrapping_mul(rhs_bits)
+                                        }
+                                        BinOp::BitAnd => lhs_bits & rhs_bits,
+                                        BinOp::BitOr => lhs_bits | rhs_bits,
+                                        BinOp::BitXor => lhs_bits ^ rhs_bits,
+                                        // The shift amount is masked to the width of the left operand.
+                                        BinOp::Shl | BinOp::ShlUnchecked => {
+                                            lhs_bits << (rhs_bits % u128::from(size.bits()))
+                                        }
+                                        _ => return None,
+                                    };
+                                    computed_scalar_int =
+                                        ScalarInt::try_from_uint(size.truncate(bits), size);
                                 }
                                 _ => return None,
                             }
