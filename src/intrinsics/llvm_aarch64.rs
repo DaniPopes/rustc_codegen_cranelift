@@ -53,7 +53,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             });
         }
 
-        "llvm.aarch64.neon.fcvtns.v4i32.v4f32" => {
+        "llvm.aarch64.neon.fcvtns.v4i32.v4f32" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a); intrinsic);
 
             // Note: Using inline asm instead of fcvt_to_sint as the latter rounds to zero rather than to nearest
@@ -90,7 +90,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             ret.write_cvalue_transmute(fx, res);
         }
 
-        "llvm.aarch64.neon.frecpe.v4f32" => {
+        "llvm.aarch64.neon.frecpe.v4f32" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a); intrinsic);
 
             let a_ptr = a.force_stack(fx).0.get_addr(fx);
@@ -125,7 +125,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             ret.write_cvalue_transmute(fx, res);
         }
 
-        "llvm.aarch64.neon.frecps.v4f32" => {
+        "llvm.aarch64.neon.frecps.v4f32" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
             let a_ptr = a.force_stack(fx).0.get_addr(fx);
@@ -501,7 +501,9 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
         | "llvm.aarch64.crc32cb"
         | "llvm.aarch64.crc32ch"
         | "llvm.aarch64.crc32cw"
-        | "llvm.aarch64.crc32cx" => {
+        | "llvm.aarch64.crc32cx"
+            if !fx.llvm_fallback =>
+        {
             // ARM ARM v8-A: CRC32{,C}{B,H,W,X}.
             // Backs core::arch::aarch64::__crc32{,c}{b,h,w,d}.
             intrinsic_args!(fx, args => (crc, v); intrinsic);
@@ -544,7 +546,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.aese" | "llvm.aarch64.crypto.aesd" => {
+        "llvm.aarch64.crypto.aese" | "llvm.aarch64.crypto.aesd" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -579,7 +581,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.aesmc" | "llvm.aarch64.crypto.aesimc" => {
+        "llvm.aarch64.crypto.aesmc" | "llvm.aarch64.crypto.aesimc" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -605,7 +607,9 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.sha1c" | "llvm.aarch64.crypto.sha1m" | "llvm.aarch64.crypto.sha1p" => {
+        "llvm.aarch64.crypto.sha1c" | "llvm.aarch64.crypto.sha1m" | "llvm.aarch64.crypto.sha1p"
+            if !fx.llvm_fallback =>
+        {
             intrinsic_args!(fx, args => (a, b, c); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -664,7 +668,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.sha1h" => {
+        "llvm.aarch64.crypto.sha1h" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -698,7 +702,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.sha1su0" => {
+        "llvm.aarch64.crypto.sha1su0" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b, c); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -734,7 +738,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.sha1su1" => {
+        "llvm.aarch64.crypto.sha1su1" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -763,7 +767,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.sha256h" | "llvm.aarch64.crypto.sha256h2" => {
+        "llvm.aarch64.crypto.sha256h" | "llvm.aarch64.crypto.sha256h2" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b, c); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -805,7 +809,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.sha256su0" => {
+        "llvm.aarch64.crypto.sha256su0" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -834,7 +838,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.sha256su1" => {
+        "llvm.aarch64.crypto.sha256su1" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b, c); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -870,7 +874,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.sha512h" | "llvm.aarch64.crypto.sha512h2" => {
+        "llvm.aarch64.crypto.sha512h" | "llvm.aarch64.crypto.sha512h2" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b, c); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -912,7 +916,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.sha512su0" => {
+        "llvm.aarch64.crypto.sha512su0" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -941,7 +945,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.crypto.sha512su1" => {
+        "llvm.aarch64.crypto.sha512su1" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b, c); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -1059,7 +1063,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.neon.pmull64" => {
+        "llvm.aarch64.neon.pmull64" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
             let a = a.load_scalar(fx);
@@ -1105,7 +1109,7 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
             );
         }
 
-        "llvm.aarch64.neon.pmull.v8i16" => {
+        "llvm.aarch64.neon.pmull.v8i16" if !fx.llvm_fallback => {
             intrinsic_args!(fx, args => (a, b); intrinsic);
 
             let a = a.load_scalar(fx);
