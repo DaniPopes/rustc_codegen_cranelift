@@ -97,9 +97,9 @@ pub(super) fn codegen_llvm_fallback_or_trap<'tcx>(
 
     fx.tcx.dcx().warn(format!("unsupported llvm intrinsic {}; replacing with trap", intrinsic));
     let msg = format!(
-        "{intrinsic} is not yet supported.\n\
-         See https://github.com/rust-lang/rustc_codegen_cranelift/issues/171\n\
-         Please open an issue at https://github.com/rust-lang/rustc_codegen_cranelift/issues"
+        "{intrinsic} is not supported by the Cranelift backend.\n\
+         It is neither lowered natively nor compiled by the LLVM backend, which is not available \
+         in JIT mode or with CG_CLIF_FORCE_GNU_AS and cannot express every argument type."
     );
     crate::base::codegen_panic_nounwind(fx, &msg, span);
     false
