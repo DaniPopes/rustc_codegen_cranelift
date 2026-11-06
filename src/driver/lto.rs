@@ -288,12 +288,14 @@ fn link_relocatable(
     }
     write_file(dcx, &list_path, list.as_bytes());
 
-    // The name derived from the linker may not exist, for example for a versioned `clang-22`.
+    // The name derived from the linker may not exist, for example for a versioned `clang-22`, or
+    // may not be a linker, for example `rust-lld`. Apple's ld has no `--version`.
     let Some((linker, version)) = [crate::toolchain::get_toolchain_binary(sess, "ld"), "ld".into()]
         .into_iter()
         .find_map(|linker| {
-            let version = Command::new(&linker).arg("--version").output().ok()?.stdout;
-            Some((linker, version))
+            let output = Command::new(&linker).arg("--version").output().ok()?;
+            (output.status.success() || sess.target.is_like_darwin)
+                .then_some((linker, output.stdout))
         })
     else {
         dcx.fatal("failed to find `ld` to merge object files for LTO");
