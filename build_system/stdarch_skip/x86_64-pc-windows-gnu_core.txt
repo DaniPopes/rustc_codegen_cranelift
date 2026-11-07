@@ -1,0 +1,8 @@
+# f16 to f32 conversions of vectors only convert the first lane on Windows GNU, where rustc does
+# not consider f16 reliable.
+mm_cvtph_ps
+mm256_cvtph_ps
+mm_mask_cvtph_ps
+mm_maskz_cvtph_ps
+mm256_mask_cvtph_ps
+mm256_maskz_cvtph_ps

@@ -182,7 +182,11 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
                 a,
                 b,
                 ret,
-                &|fx, _lane_ty, _res_lane_ty, a_lane, b_lane| fx.bcx.ins().fmax(a_lane, b_lane),
+                &|fx, _lane_ty, _res_lane_ty, a_lane, b_lane| {
+                    // Unlike `fmax` this returns `b` for NaNs and when both inputs are zeros.
+                    let a_gt_b = fx.bcx.ins().fcmp(FloatCC::GreaterThan, a_lane, b_lane);
+                    fx.bcx.ins().select(a_gt_b, a_lane, b_lane)
+                },
             );
         }
 
@@ -195,7 +199,11 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
                 a,
                 b,
                 ret,
-                &|fx, _lane_ty, _res_lane_ty, a_lane, b_lane| fx.bcx.ins().fmin(a_lane, b_lane),
+                &|fx, _lane_ty, _res_lane_ty, a_lane, b_lane| {
+                    // Unlike `fmin` this returns `b` for NaNs and when both inputs are zeros.
+                    let a_lt_b = fx.bcx.ins().fcmp(FloatCC::LessThan, a_lane, b_lane);
+                    fx.bcx.ins().select(a_lt_b, a_lane, b_lane)
+                },
             );
         }
 
@@ -1317,7 +1325,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
                 fx,
                 &[InlineAsmTemplatePiece::String("rdtsc".into())],
                 &[
-                    CInlineAsmOperand::Out {
+                    CInlineAsmOperand::<Value>::Out {
                         reg: InlineAsmRegOrRegClass::Reg(InlineAsmReg::X86(X86InlineAsmReg::ax)),
                         late: true,
                         place: Some(eax_place),
@@ -1332,6 +1340,15 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             );
             let res = res_place.to_cvalue(fx);
             ret.write_cvalue_transmute(fx, res);
+        }
+
+        "llvm.x86.xbegin" => {
+            // Hardware transactional memory may always abort, so never start a transaction. The
+            // fallback path of the caller runs instead. The status is the abort status with no
+            // flags set. A wrapper compiled by the LLVM backend can't implement this as an abort
+            // resumes at the instruction after the xbegin in the caller.
+            let status = fx.bcx.ins().iconst(types::I32, 0);
+            ret.write_cvalue(fx, CValue::by_val(status, ret.layout()));
         }
 
         "llvm.x86.vcvtps2ph.128" => {

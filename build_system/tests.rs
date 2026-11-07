@@ -82,6 +82,7 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         &[],
     ),
     TestCase::build_bin_and_run("aot.dst_field_align", "example/dst-field-align.rs", &[]),
+    TestCase::build_bin_and_run("aot.inline-asm-operands", "example/inline-asm-operands.rs", &[]),
     TestCase::build_bin_and_run(
         "aot.subslice-patterns-const-eval",
         "example/subslice-patterns-const-eval.rs",
@@ -344,7 +345,7 @@ const EXTENDED_SYSROOT_SUITE: &[TestCase] = &[
         let (arch, _) = target.split_once('-').unwrap();
 
         // FIXME: Add support for remaining architectures.
-        if !["aarch64"].contains(&arch) {
+        if !["aarch64", "x86_64"].contains(&arch) {
             eprintln!("Skipping `stdarch-core` tests: unsupported target");
             return;
         }
@@ -358,8 +359,14 @@ const EXTENDED_SYSROOT_SUITE: &[TestCase] = &[
 
         STDARCH.clean(&runner.dirs);
 
-        let skip = format!("build_system/stdarch_skip/{arch}_core.txt");
-        let skip = fs::read_to_string(runner.dirs.source_dir.join(skip)).unwrap_or_default();
+        let skip = [format!("{arch}_core.txt"), format!("{target}_core.txt")]
+            .into_iter()
+            .map(|skip| {
+                let skip = runner.dirs.source_dir.join("build_system/stdarch_skip").join(skip);
+                fs::read_to_string(skip).unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let skip_functions = skip
             .lines()
