@@ -8,6 +8,7 @@ use rustc_target::callconv::{
     ArgAbi, ArgAttributes, ArgExtension as RustcArgExtension, CastTarget, IndirectMode, PassMode,
     Uniform,
 };
+use rustc_target::spec::Arch;
 use smallvec::{SmallVec, smallvec};
 
 use super::{ArgValue, is_tail_conv};
@@ -238,8 +239,11 @@ impl<'tcx> ArgAbiExt<'tcx> for ArgAbi<'tcx, Ty<'tcx>> {
             PassMode::Indirect { attrs, address_space: _, mode } => {
                 assert!(mode == IndirectMode::Pointer);
                 // Cranelift's `tail` calling convention doesn't support `StructReturn` on aarch64.
-                // The return pointer is a plain first parameter for it.
-                let purpose = if is_tail_conv(conv) {
+                // The return pointer is a plain first parameter for it. LLVM's `preserve_most`
+                // convention on x86_64 doesn't return the pointer in `rax`, which it preserves.
+                let purpose = if is_tail_conv(conv)
+                    || (conv == CanonAbi::RustCold && tcx.sess.target.arch == Arch::X86_64)
+                {
                     ArgumentPurpose::Normal
                 } else {
                     ArgumentPurpose::StructReturn

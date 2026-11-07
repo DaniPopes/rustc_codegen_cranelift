@@ -3,6 +3,7 @@
 #![feature(explicit_tail_calls, rust_preserve_none_cc)]
 #![allow(improper_ctypes_definitions, incomplete_features)]
 
+use std::arch::asm;
 use std::hint::black_box;
 
 use callee::{fold, mix};
@@ -296,9 +297,121 @@ fn check_tail_calls() {
     assert_eq!(result, expected, "tail call chain between the backends");
 }
 
+/// Calls `callee::cold::burn` from assembly with values in the registers that the `preserve_most`
+/// convention preserves and checks that they are still there.
+#[cfg(target_arch = "x86_64")]
+fn burn_preserves_registers() -> u64 {
+    let (failed, result): (u64, u64);
+    unsafe {
+        asm!(
+            "mov r12, rsp",
+            "and rsp, -16",
+            "mov rcx, 0x41",
+            "mov rdx, 0x42",
+            "mov rsi, 0x43",
+            "mov r8, 0x45",
+            "mov r9, 0x46",
+            "mov r10, 0x47",
+            "mov rdi, 7",
+            "call {f}",
+            "mov rsp, r12",
+            "xor r13d, r13d",
+            "xor rcx, 0x41",
+            "or r13, rcx",
+            "xor rdx, 0x42",
+            "or r13, rdx",
+            "xor rsi, 0x43",
+            "or r13, rsi",
+            "xor r8, 0x45",
+            "or r13, r8",
+            "xor r9, 0x46",
+            "or r13, r9",
+            "xor r10, 0x47",
+            "or r13, r10",
+            "xor rdi, 7",
+            "or r13, rdi",
+            f = sym callee::cold::burn,
+            out("r12") _,
+            out("r13") failed,
+            out("rax") result,
+            clobber_abi("C"),
+        );
+    }
+    assert_eq!(result, callee::cold::burn(7));
+    failed
+}
+
+#[cfg(target_arch = "aarch64")]
+fn burn_preserves_registers() -> u64 {
+    let (failed, result): (u64, u64);
+    unsafe {
+        asm!(
+            "mov x9, 0x41",
+            "mov x10, 0x42",
+            "mov x11, 0x43",
+            "mov x12, 0x44",
+            "mov x13, 0x45",
+            "mov x14, 0x46",
+            "mov x15, 0x47",
+            "mov x0, 7",
+            "bl {f}",
+            "mov x1, x0",
+            "mov x21, 0",
+            "mov x22, 0x41",
+            "eor x9, x9, x22",
+            "orr x21, x21, x9",
+            "mov x22, 0x42",
+            "eor x10, x10, x22",
+            "orr x21, x21, x10",
+            "mov x22, 0x43",
+            "eor x11, x11, x22",
+            "orr x21, x21, x11",
+            "mov x22, 0x44",
+            "eor x12, x12, x22",
+            "orr x21, x21, x12",
+            "mov x22, 0x45",
+            "eor x13, x13, x22",
+            "orr x21, x21, x13",
+            "mov x22, 0x46",
+            "eor x14, x14, x22",
+            "orr x21, x21, x14",
+            "mov x22, 0x47",
+            "eor x15, x15, x22",
+            "orr x21, x21, x15",
+            f = sym callee::cold::burn,
+            out("x21") failed,
+            out("x22") _,
+            out("x1") result,
+            clobber_abi("C"),
+        );
+    }
+    assert_eq!(result, callee::cold::burn(7));
+    failed
+}
+
+/// Values that live in registers across calls of a function that uses many registers, including
+/// the vector ones that `preserve_most` doesn't preserve.
+fn check_cold_caller_saves() {
+    let ints = black_box([3u64, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41]);
+    let floats = black_box([1.5f64, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5]);
+    let r = callee::cold::burn(black_box(5));
+    let f = callee::cold::burn_floats(black_box(1.25));
+    let isum: u64 = ints.iter().sum();
+    let fsum: f64 = floats.iter().sum();
+    assert_eq!(isum, 236);
+    assert_eq!(fsum, 40.0);
+    assert_eq!(r, callee::cold::burn(5));
+    assert_eq!(f, callee::cold::burn_floats(1.25));
+    assert_eq!(ints.iter().map(|x| x * 2).sum::<u64>(), 472);
+    assert_eq!(floats.iter().map(|x| x * 2.0).sum::<f64>(), 80.0);
+}
+
 fn main() {
     check_abi!(rust);
     check_abi!(c);
+    check_abi!(rust_cold);
+    assert_eq!(burn_preserves_registers(), 0, "burn must preserve registers");
+    check_cold_caller_saves();
     check_preserve_none();
     check_tail_calls();
 }

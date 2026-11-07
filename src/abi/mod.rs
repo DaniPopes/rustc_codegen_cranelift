@@ -60,7 +60,13 @@ pub(crate) fn conv_to_call_conv(
     default_call_conv: CallConv,
 ) -> CallConv {
     match c {
-        CanonAbi::Rust | CanonAbi::RustCold | CanonAbi::C => default_call_conv,
+        CanonAbi::Rust | CanonAbi::C => default_call_conv,
+
+        // LLVM uses `preserve_most` on x86_64 and aarch64, and the C calling convention elsewhere.
+        CanonAbi::RustCold => match sess.target.arch {
+            Arch::X86_64 | Arch::AArch64 => CallConv::PreserveMost,
+            _ => default_call_conv,
+        },
 
         // LLVM uses `preserve_none` on x86_64 and aarch64, and the C calling convention elsewhere.
         // Elsewhere Cranelift's `tail` calling convention keeps `become` a guaranteed tail call.
