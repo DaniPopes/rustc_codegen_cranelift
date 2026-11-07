@@ -190,7 +190,15 @@ pub mod preserve_none {
 
     #[inline(never)]
     pub extern "rust-preserve-none" fn small_late(
-        a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u8, i: u64,
+        a: u64,
+        b: u64,
+        c: u64,
+        d: u64,
+        e: u64,
+        f: u64,
+        g: u64,
+        h: u8,
+        i: u64,
     ) -> u64 {
         mix(&[a, b, c, d, e, f, g, h as u64, i])
     }

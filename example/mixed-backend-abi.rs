@@ -18,15 +18,49 @@ macro_rules! check_many_args {
         use callee::$module::many_args;
 
         let ints = black_box([1u64; 26]);
-        let [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25] =
-            ints.map(|x| x + 1);
+        let [
+            a0,
+            a1,
+            a2,
+            a3,
+            a4,
+            a5,
+            a6,
+            a7,
+            a8,
+            a9,
+            a10,
+            a11,
+            a12,
+            a13,
+            a14,
+            a15,
+            a16,
+            a17,
+            a18,
+            a19,
+            a20,
+            a21,
+            a22,
+            a23,
+            a24,
+            a25,
+        ] = ints.map(|x| x + 1);
         let [f0, f1, f2, f3, f4, f5, f6, f7, f8, f9] = black_box([0.5f64; 10]);
         let expected = mix(&[
             a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18,
             a19, a20, a21, a22, a23, a24, a25,
         ]) as f64
-            + f0 + f1 * 2.0 + f2 * 3.0 + f3 * 4.0 + f4 * 5.0 + f5 * 6.0 + f6 * 7.0 + f7 * 8.0
-            + f8 * 9.0 + f9 * 10.0;
+            + f0
+            + f1 * 2.0
+            + f2 * 3.0
+            + f3 * 4.0
+            + f4 * 5.0
+            + f5 * 6.0
+            + f6 * 7.0
+            + f7 * 8.0
+            + f8 * 9.0
+            + f9 * 10.0;
         let result = many_args(
             a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18,
             a19, a20, a21, a22, a23, a24, a25, f0, f1, f2, f3, f4, f5, f6, f7, f8, f9,
