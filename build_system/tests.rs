@@ -82,13 +82,22 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         if !runner.is_native {
             return;
         }
-        runner.run_rustc([
+        let mut cmd = runner.rustc_command([
             "example/std_example.rs",
             "--crate-name",
             "std_example_native_cpu",
             "-Ctarget-cpu=native",
         ]);
-        runner.run_out_command("std_example_native_cpu", &["arg"]);
+        // The macOS linker rejects the unwind tables of x86_64 objects compiled for the host CPU.
+        // Compiling is enough to catch crashes in the backend.
+        let link = runner.target_compiler.target != "x86_64-apple-darwin";
+        if !link {
+            cmd.arg("--emit=obj");
+        }
+        spawn_and_wait(cmd);
+        if link {
+            runner.run_out_command("std_example_native_cpu", &["arg"]);
+        }
     }),
     TestCase::build_bin_and_run("aot.dst_field_align", "example/dst-field-align.rs", &[]),
     TestCase::build_bin_and_run(
