@@ -121,7 +121,7 @@ impl UnwindContext {
         context: &Context,
     ) {
         let triple = module.isa().triple();
-        if matches!(triple.operating_system, target_lexicon::OperatingSystem::MacOSX { .. })
+        if triple.binary_format == target_lexicon::BinaryFormat::Macho
             && triple.architecture == target_lexicon::Architecture::X86_64
         {
             // The object crate doesn't currently support DW_GNU_EH_PE_absptr, which macOS
