@@ -167,6 +167,13 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         run(&["-Copt-level=1", "-Zmir-enable-passes=-DestinationPropagation"]);
     }),
     TestCase::custom("aot.deref-borrow-ssa", &|runner| {
+        let clif = BUILD_EXAMPLE_OUT_DIR
+            .to_path(&runner.dirs)
+            .join("deref-borrow-ssa.clif")
+            .join("borrow_field.unopt.clif");
+        // Don't read the CLIF of an earlier run.
+        let _ = fs::remove_file(&clif);
+
         let mut cmd = runner.rustc_command([
             "example/deref-borrow-ssa.rs",
             "-Copt-level=0",
@@ -176,10 +183,6 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         let output = cmd.output().unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        let clif = BUILD_EXAMPLE_OUT_DIR
-            .to_path(&runner.dirs)
-            .join("deref-borrow-ssa.clif")
-            .join("borrow_field.unopt.clif");
         let clif = fs::read_to_string(clif)
             .unwrap_or_else(|err| panic!("failed to read the CLIF: {err}\n{stderr}"));
         assert!(!clif.contains("explicit_slot"), "`self` is in a stack slot:\n{clif}");
