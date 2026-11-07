@@ -183,6 +183,107 @@ fn check_preserve_none() {
     let Pair(x, y) = pair(a, Pair(3, 1.5), b);
     assert_eq!((x, y), (mix(&[a, 3, b]), 1.5 + 5.0 + 9.0), "preserve_none::pair");
 
+    #[cfg(target_arch = "x86_64")]
+    assert_eq!(
+        stack_i128(
+            a + 0,
+            a + 1,
+            a + 2,
+            a + 3,
+            a + 4,
+            a + 5,
+            a + 6,
+            a + 7,
+            a + 8,
+            a + 9,
+            a + 10,
+            a + 11,
+            a + 12,
+            0x1234_5678_9abc_def0_1357_9bdf_0246_8ace,
+            a + 99
+        ),
+        mix(&[
+            a + 0,
+            a + 1,
+            a + 2,
+            a + 3,
+            a + 4,
+            a + 5,
+            a + 6,
+            a + 7,
+            a + 8,
+            a + 9,
+            a + 10,
+            a + 11,
+            a + 12,
+            fold(0x1234_5678_9abc_def0_1357_9bdf_0246_8ace),
+            a + 99
+        ]),
+        "preserve_none::stack_i128"
+    );
+    #[cfg(target_arch = "aarch64")]
+    assert_eq!(
+        stack_i128(
+            a + 0,
+            a + 1,
+            a + 2,
+            a + 3,
+            a + 4,
+            a + 5,
+            a + 6,
+            a + 7,
+            a + 8,
+            a + 9,
+            a + 10,
+            a + 11,
+            a + 12,
+            a + 13,
+            a + 14,
+            a + 15,
+            a + 16,
+            a + 17,
+            a + 18,
+            a + 19,
+            a + 20,
+            a + 21,
+            a + 22,
+            a + 23,
+            a + 24,
+            0x1234_5678_9abc_def0_1357_9bdf_0246_8ace,
+            a + 99
+        ),
+        mix(&[
+            a + 0,
+            a + 1,
+            a + 2,
+            a + 3,
+            a + 4,
+            a + 5,
+            a + 6,
+            a + 7,
+            a + 8,
+            a + 9,
+            a + 10,
+            a + 11,
+            a + 12,
+            a + 13,
+            a + 14,
+            a + 15,
+            a + 16,
+            a + 17,
+            a + 18,
+            a + 19,
+            a + 20,
+            a + 21,
+            a + 22,
+            a + 23,
+            a + 24,
+            fold(0x1234_5678_9abc_def0_1357_9bdf_0246_8ace),
+            a + 99
+        ]),
+        "preserve_none::stack_i128"
+    );
+
     let x = Big(black_box([1, 2, 3, 4, 5]));
     let y = Big(black_box([6, 7, 8, 9, 10]));
     let mut want = x.0;
@@ -296,9 +397,31 @@ fn check_tail_calls() {
     assert_eq!(result, expected, "tail call chain between the backends");
 }
 
+fn check_stack_tail_calls() {
+    const N: u64 = 2_000_000;
+    let mut a: [u64; 16] = std::array::from_fn(|i| i as u64 * 7 + 1);
+    let a0 = black_box(a);
+    let result = callee::hop(
+        N, a0[0], a0[1], a0[2], a0[3], a0[4], a0[5], a0[6], a0[7], a0[8], a0[9], a0[10], a0[11],
+        a0[12], a0[13], a0[14], a0[15],
+    );
+    // The same chain without the calls.
+    for _ in 0..N {
+        a[15] += a[0];
+        a[0] += 1;
+        a[14] ^= 3;
+    }
+    assert_eq!(
+        result,
+        a.iter().fold(0u64, |r, &x| r.wrapping_mul(1_000_003).wrapping_add(x)),
+        "tail calls with stack arguments"
+    );
+}
+
 fn main() {
     check_abi!(rust);
     check_abi!(c);
     check_preserve_none();
     check_tail_calls();
+    check_stack_tail_calls();
 }
