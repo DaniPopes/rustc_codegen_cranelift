@@ -118,6 +118,7 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         "example/track-caller-attribute.rs",
         &[],
     ),
+    TestCase::build_bin_and_run("aot.tail-calls", "example/tail-calls.rs", &[]),
     TestCase::build_bin_and_run("aot.float-minmax-pass", "example/float-minmax-pass.rs", &[]),
     TestCase::custom("aot.powi_libcall_signature", &|runner| {
         let mut cmd = runner.rustc_command(["example/powi-libcall-signature.rs"]);

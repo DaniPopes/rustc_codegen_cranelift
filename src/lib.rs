@@ -19,6 +19,7 @@ extern crate rustc_data_structures;
 extern crate rustc_errors;
 extern crate rustc_hir;
 extern crate rustc_index;
+extern crate rustc_lint_defs;
 extern crate rustc_log;
 extern crate rustc_middle;
 extern crate rustc_session;
@@ -283,7 +284,10 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
 
     let frame_ptr =
         { sess.target.options.frame_pointer }.ratchet(sess.opts.cg.force_frame_pointers);
-    let preserve_frame_pointer = frame_ptr != rustc_target::spec::FramePointer::MayOmit;
+    // Cranelift's x86_64 backend always sets up a frame pointer. It only reads this flag to assert
+    // it for tail calls, so forcing it doesn't change the generated code.
+    let preserve_frame_pointer =
+        frame_ptr != rustc_target::spec::FramePointer::MayOmit || sess.target.arch == Arch::X86_64;
     flags_builder
         .set("preserve_frame_pointers", if preserve_frame_pointer { "true" } else { "false" })
         .unwrap();

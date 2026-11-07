@@ -19,6 +19,7 @@ aot.std_example
 aot.dst_field_align
 aot.subslice-patterns-const-eval
 aot.track-caller-attribute
+aot.tail-calls
 aot.float-minmax-pass
 aot.powi_libcall_signature
 aot.tls_conflicting_declarations
