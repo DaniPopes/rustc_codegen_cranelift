@@ -894,6 +894,18 @@ impl<'tcx> CPlace<'tcx> {
         chunk_idx: u32,
         chunk: Value,
     ) {
+        if let CPlaceInner::Var(_, var) = self.inner {
+            // Only 128-bit vectors are held in variables, so there is a single chunk.
+            assert_eq!(chunk_idx, 0);
+            let var_ty = crate::analyze::ssa_clif_type(fx, self.layout).unwrap();
+            let chunk = if fx.bcx.func.dfg.value_type(chunk) == var_ty {
+                chunk
+            } else {
+                codegen_bitcast(fx, var_ty, chunk)
+            };
+            fx.bcx.def_var(var, chunk);
+            return;
+        }
         let flags = MemFlagsData::new().with_notrap();
         self.to_ptr().offset_i64(fx, i64::from(chunk_idx) * 16).store(fx, chunk, flags);
     }
