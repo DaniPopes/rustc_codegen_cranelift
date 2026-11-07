@@ -8,7 +8,7 @@ use cranelift_object::ObjectProduct;
 use gimli::write::{Address, CieId, EhFrame, FrameTable, Section};
 use gimli::{Encoding, Format, RunTimeEndian};
 use rustc_session::Session;
-use rustc_target::spec::{Arch, BinaryFormat, PanicStrategy};
+use rustc_target::spec::{Arch, PanicStrategy};
 use target_lexicon::BinaryFormat;
 
 use super::emit::{DebugRelocName, address_for_data, address_for_func};
@@ -24,12 +24,13 @@ pub(crate) const EXCEPTION_HANDLER_CATCH: u32 = 1;
 /// Returns whether landing pads, personality and LSDA are emitted and `catch_unwind` catches.
 ///
 /// This requires `-Cpanic=unwind` and a target for which [`UnwindContext`] can emit the needed
-/// `.eh_frame` and `.gcc_except_table`, which is ELF on x86_64 and aarch64.
+/// `.eh_frame` and `.gcc_except_table`, which is ELF on x86_64 and aarch64 and Mach-O on aarch64.
 pub(crate) fn unwinding_enabled(sess: &Session) -> bool {
     sess.panic_strategy() == PanicStrategy::Unwind
         && matches!(
             (sess.target.binary_format, &sess.target.arch),
-            (BinaryFormat::Elf, Arch::X86_64 | Arch::AArch64)
+            (rustc_target::spec::BinaryFormat::Elf, Arch::X86_64 | Arch::AArch64)
+                | (rustc_target::spec::BinaryFormat::MachO, Arch::AArch64)
         )
 }
 pub(crate) const EXCEPTION_HANDLER_TERMINATE: u32 = 2;
