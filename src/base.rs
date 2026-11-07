@@ -91,8 +91,6 @@ pub(crate) fn codegen_fn<'tcx>(
         None
     };
 
-    let exception_slot = bcx.declare_var(pointer_type);
-
     let mut fx = FunctionCx {
         module,
         debug_context,
@@ -112,7 +110,8 @@ pub(crate) fn codegen_fn<'tcx>(
         block_map,
         local_map: IndexVec::with_capacity(mir.local_decls.len()),
         caller_location: None, // set by `codegen_fn_prelude`
-        exception_slot,
+        exception_slot: None,
+        unwind_pads: FxHashMap::default(),
 
         clif_comments,
         inline_asm: String::new(),
@@ -313,7 +312,7 @@ fn codegen_fn_body(fx: &mut FunctionCx<'_, '_, '_>, start_block: Block) {
         }
 
         if bb_data.is_cleanup {
-            if cfg!(not(feature = "unwinding")) {
+            if !crate::debuginfo::unwinding_enabled(fx.tcx.sess) {
                 continue;
             }
 
@@ -574,8 +573,14 @@ fn codegen_fn_body(fx: &mut FunctionCx<'_, '_, '_>, start_block: Block) {
                 codegen_unwind_terminate(fx, source_info.span, *reason);
             }
             TerminatorKind::UnwindResume => {
-                if cfg!(feature = "unwinding") {
-                    let exception_ptr = fx.bcx.use_var(fx.exception_slot);
+                if crate::debuginfo::unwinding_enabled(fx.tcx.sess) {
+                    let exception_slot = fx.exception_slot();
+                    let exception_ptr = fx.bcx.ins().stack_load(
+                        fx.pointer_type,
+                        fx.pointer_type,
+                        exception_slot,
+                        0,
+                    );
                     fx.lib_call(
                         "_Unwind_Resume",
                         vec![AbiParam::new(fx.pointer_type)],

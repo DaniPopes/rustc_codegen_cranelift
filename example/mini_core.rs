@@ -843,3 +843,15 @@ pub fn get_tls() -> u8 {
 
     A
 }
+
+struct CleanupOnUnwind;
+
+impl Drop for CleanupOnUnwind {
+    fn drop(&mut self) {}
+}
+
+/// Unwinding out of `f` runs a cleanup landing pad, which needs a personality function and LSDA.
+pub fn call_with_cleanup(f: fn()) {
+    let _guard = CleanupOnUnwind;
+    f();
+}

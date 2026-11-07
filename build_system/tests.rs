@@ -1,6 +1,7 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::build_sysroot::{SysrootConfig, SysrootKind};
@@ -59,6 +60,43 @@ impl TestCase {
 
 const NO_SYSROOT_SUITE: &[TestCase] = &[
     TestCase::build_lib("build.mini_core", "example/mini_core.rs", "lib,dylib"),
+    TestCase::custom("build.eh_frame_encodings", &|runner| {
+        if !runner.panic_unwind_support {
+            eprintln!("Unwinding is not supported on this target");
+            return;
+        }
+        let objdump = get_default_sysroot(&runner.bootstrap_host_compiler.rustc)
+            .join("lib/rustlib")
+            .join(&runner.bootstrap_host_compiler.target)
+            .join("bin/llvm-objdump");
+        if !objdump.exists() {
+            eprintln!("llvm-objdump is not installed (rustup component llvm-tools)");
+            return;
+        }
+
+        let out_dir = BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs);
+        for target in
+            ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin"]
+        {
+            let emit_object = |mut cmd: Command, name: &str| {
+                let object = out_dir.join(format!("eh_frame_encodings_{target}_{name}.o"));
+                cmd.args(["--target", target, "--crate-type", "lib", "--crate-name", "mini_core"])
+                    .args(["--edition=2024", "-Zforce-unstable-if-unmarked", "-Cpanic=unwind"])
+                    .args(["--emit", "obj", "-o"])
+                    .arg(&object)
+                    .arg("example/mini_core.rs");
+                spawn_and_wait(cmd);
+                cie_pointer_encodings(&objdump, &object)
+            };
+
+            let mut clif_cmd = Command::new(&runner.target_compiler.rustc);
+            clif_cmd.args(&runner.target_compiler.rustflags);
+            let clif = emit_object(clif_cmd, "clif");
+            let llvm = emit_object(Command::new(&runner.bootstrap_host_compiler.rustc), "llvm");
+            assert!(!llvm.is_empty(), "{target}: LLVM didn't emit a CIE");
+            assert_eq!(clif, llvm, "{target}: CIE pointer encodings differ from LLVM");
+        }
+    }),
     TestCase::build_lib("build.example", "example/example.rs", "lib"),
     TestCase::jit_bin("jit.mini_core_hello_world", "example/mini_core_hello_world.rs", "abc bcd"),
     TestCase::build_bin_and_run(
@@ -74,8 +112,10 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         "example/arbitrary_self_types_pointers_and_wrappers.rs",
         &[],
     ),
+    TestCase::jit_bin("jit.catch_unwind", "example/catch_unwind.rs", ""),
     TestCase::jit_bin("jit.std_example", "example/std_example.rs", "arg"),
     TestCase::build_bin_and_run("aot.std_example", "example/std_example.rs", &["arg"]),
+    TestCase::build_bin_and_run("aot.catch_unwind", "example/catch_unwind.rs", &[]),
     TestCase::build_bin_and_run("aot.dst_field_align", "example/dst-field-align.rs", &[]),
     TestCase::build_bin_and_run(
         "aot.subslice-patterns-const-eval",
@@ -145,10 +185,114 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             );
         }
     }),
+    TestCase::custom("aot.unwind", &|runner| {
+        if !runner.panic_unwind_support {
+            eprintln!("Unwinding is not supported on this target");
+            return;
+        }
+        runner.run_rustc(["example/unwind.rs"]);
+        runner.run_out_command("unwind", &[]);
+
+        // A panic in a destructor during cleanup and a panic escaping from an `extern "C"`
+        // function have to abort.
+        for (arg, message) in [
+            ("abort-in-drop", "panic in a destructor during cleanup"),
+            ("abort-extern-c", "panic in a function that cannot unwind"),
+        ] {
+            let mut cmd = runner
+                .target_compiler
+                .run_with_runner(BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join("unwind"));
+            let output = cmd.arg(arg).output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                const SIGABRT: i32 = 6;
+                assert_eq!(
+                    output.status.signal(),
+                    Some(SIGABRT),
+                    "{arg}: unexpected exit:\n{stderr}"
+                );
+            }
+            assert!(!output.status.success(), "{arg}: expected abort, got success");
+            assert!(stderr.contains(message), "{arg}: expected `{message}`, got:\n{stderr}");
+        }
+    }),
+    TestCase::custom("aot.unwind-lsda", &|runner| {
+        if !runner.panic_unwind_support
+            || !runner.is_native
+            || !runner.target_compiler.target.contains("linux")
+        {
+            eprintln!("[SKIP] unwind-lsda (unsupported target, panic=abort or cross compiling)");
+            return;
+        }
+        let objdump = get_default_sysroot(&runner.bootstrap_host_compiler.rustc)
+            .join("lib/rustlib")
+            .join(&runner.bootstrap_host_compiler.target)
+            .join("bin/llvm-objdump");
+        if !objdump.exists() {
+            eprintln!("llvm-objdump is not installed (rustup component llvm-tools)");
+            return;
+        }
+
+        let out_dir = BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs);
+        let emit_object = |mut cmd: Command, name: &str| {
+            let object = out_dir.join(format!("unwind_lsda_{name}.o"));
+            cmd.args(["--crate-type", "lib", "--crate-name", "unwind_lsda"])
+                .args(["--edition=2024", "-Cpanic=unwind", "-Cmetadata=lsda"])
+                .args(["--emit", "obj", "-o"])
+                .arg(&object)
+                .arg("example/unwind-lsda.rs");
+            spawn_and_wait(cmd);
+            exception_tables(&objdump, &object)
+        };
+
+        let mut clif_cmd = Command::new(&runner.target_compiler.rustc);
+        clif_cmd.args(&runner.target_compiler.rustflags);
+        let clif = emit_object(clif_cmd, "clif");
+        let llvm = emit_object(Command::new(&runner.bootstrap_host_compiler.rustc), "llvm");
+
+        // Only `shared_cleanup` has landing pads, so only it has an LSDA and an FDE with a
+        // personality function. Its calls with the same cleanup share one call site entry, so
+        // there are no more entries with a landing pad than in LLVM's.
+        assert_eq!(clif.fdes_with_personality, llvm.fdes_with_personality);
+        assert_eq!(llvm.fdes_with_personality, 1);
+        assert_eq!(clif.landing_pad_call_sites.len(), 1);
+        assert!(
+            clif.landing_pad_call_sites <= llvm.landing_pad_call_sites,
+            "more call sites with landing pads than LLVM: {clif:?} vs {llvm:?}"
+        );
+    }),
     TestCase::build_bin_and_run("aot.issue-72793", "example/issue-72793.rs", &[]),
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
     TestCase::build_bin_and_run("aot.raw-dylib", "example/raw-dylib.rs", &[]),
+    TestCase::custom("aot.unwind-terminate", &|runner| {
+        // Needs unwinding and a pthread-based forced unwind.
+        if !runner.panic_unwind_support || !runner.target_compiler.target.contains("linux") {
+            eprintln!("[SKIP] unwind-terminate (unsupported target or panic=abort)");
+            return;
+        }
+
+        runner.run_rustc(["example/unwind-terminate-forced.rs"]);
+        runner.run_out_command("unwind-terminate-forced", &[]);
+
+        runner.run_rustc(["example/unwind-terminate-panic.rs"]);
+        let output = runner
+            .target_compiler
+            .run_with_runner(
+                BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join("unwind-terminate-panic"),
+            )
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "expected an abort, got success");
+        assert!(
+            stderr.contains("panic in a function that cannot unwind"),
+            "expected the terminate landing pad to run, got:\n{stderr}"
+        );
+    }),
     TestCase::custom("test.sysroot", &|runner| {
         apply_patches(
             &runner.dirs,
@@ -473,6 +617,7 @@ pub(crate) fn run_tests(
         let runner = TestRunner::new(
             dirs.clone(),
             target_compiler,
+            bootstrap_host_compiler,
             use_unstable_features,
             sysroot_config.panic_unwind_support,
             skip_tests,
@@ -506,6 +651,7 @@ pub(crate) fn run_tests(
         let mut runner = TestRunner::new(
             dirs.clone(),
             target_compiler,
+            bootstrap_host_compiler,
             use_unstable_features,
             sysroot_config.panic_unwind_support,
             skip_tests,
@@ -537,6 +683,7 @@ struct TestRunner<'a> {
     skip_tests: &'a [&'a str],
     dirs: Dirs,
     target_compiler: Compiler,
+    bootstrap_host_compiler: &'a Compiler,
     stdlib_source: PathBuf,
 }
 
@@ -544,6 +691,7 @@ impl<'a> TestRunner<'a> {
     fn new(
         dirs: Dirs,
         mut target_compiler: Compiler,
+        bootstrap_host_compiler: &'a Compiler,
         use_unstable_features: bool,
         panic_unwind_support: bool,
         skip_tests: &'a [&'a str],
@@ -563,6 +711,7 @@ impl<'a> TestRunner<'a> {
             skip_tests,
             dirs,
             target_compiler,
+            bootstrap_host_compiler,
             stdlib_source,
         }
     }
@@ -662,4 +811,149 @@ impl<'a> TestRunner<'a> {
 
         spawn_and_wait(cmd);
     }
+}
+
+/// Returns the pointer encodings of the personality, LSDA and FDE pointers for all CIEs in
+/// `.eh_frame` of `object`, keyed by their augmentation letter.
+fn cie_pointer_encodings(objdump: &Path, object: &Path) -> BTreeMap<char, BTreeSet<String>> {
+    let output = Command::new(objdump).arg("--dwarf=frames").arg(object).output().unwrap();
+    assert!(output.status.success(), "llvm-objdump failed on {}", object.display());
+    let output = String::from_utf8(output.stdout).unwrap();
+
+    let mut encodings = BTreeMap::<_, BTreeSet<_>>::new();
+    let mut augmentation = "";
+    for line in output.lines().map(str::trim) {
+        if let Some(value) = line.strip_prefix("Augmentation:") {
+            augmentation = value.trim().trim_matches('"');
+        } else if let Some(data) = line.strip_prefix("Augmentation data:") {
+            let mut data =
+                data.split_whitespace().map(|byte| u8::from_str_radix(byte, 16).unwrap());
+            // The first letter is `z`, which means that the augmentation has data.
+            for letter in augmentation.chars().skip(1) {
+                match letter {
+                    'L' | 'R' => {
+                        encodings
+                            .entry(letter)
+                            .or_default()
+                            .insert(format!("{:#04x}", data.next().unwrap()));
+                    }
+                    'P' => {
+                        let encoding = data.next().unwrap();
+                        encodings.entry(letter).or_default().insert(format!("{encoding:#04x}"));
+                        // Skip the personality pointer, which is not part of the encoding.
+                        let pointer_size = match encoding & 0x0f {
+                            0x02 | 0x0a => 2,
+                            0x03 | 0x0b => 4,
+                            0x00 | 0x04 | 0x0c => 8,
+                            _ => panic!("unknown pointer encoding {encoding:#04x}"),
+                        };
+                        data.nth(pointer_size - 1);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    encodings
+}
+
+#[derive(Debug)]
+struct ExceptionTables {
+    /// The number of FDEs whose CIE has a personality function.
+    fdes_with_personality: usize,
+    /// For every LSDA, the number of call site entries with a landing pad, sorted.
+    landing_pad_call_sites: Vec<usize>,
+}
+
+/// Returns a summary of the FDEs and LSDAs in `object`.
+fn exception_tables(objdump: &Path, object: &Path) -> ExceptionTables {
+    let objdump_output = |arg: &str| {
+        let output = Command::new(objdump).arg(arg).arg(object).output().unwrap();
+        assert!(output.status.success(), "llvm-objdump failed on {}", object.display());
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    // `llvm-objdump --dwarf=frames` prints `<offset> <length> <id> CIE`, followed by its
+    // augmentation, and `<offset> <length> <id> FDE cie=<offset> ...` for every FDE.
+    let frames = objdump_output("--dwarf=frames");
+    let mut cies_with_personality = BTreeSet::new();
+    let mut fde_cies = vec![];
+    let mut cie_offset = "";
+    for line in frames.lines().map(str::trim) {
+        if line.ends_with(" CIE") {
+            cie_offset = line.split_whitespace().next().unwrap();
+        } else if let Some(augmentation) = line.strip_prefix("Augmentation:") {
+            if augmentation.contains('P') {
+                cies_with_personality.insert(cie_offset);
+            }
+        } else if let Some((_, fde)) = line.split_once(" FDE cie=") {
+            fde_cies.push(fde.split_whitespace().next().unwrap());
+        }
+    }
+    let fdes_with_personality =
+        fde_cies.iter().filter(|cie| cies_with_personality.contains(*cie)).count();
+
+    // Every LSDA is in its own section of the hex dump.
+    let contents = objdump_output("-s");
+    let mut lsdas = vec![];
+    for line in contents.lines() {
+        if line.starts_with("Contents of section") {
+            lsdas.push(line.contains(" .gcc_except_table").then(Vec::new));
+        } else if let Some(Some(lsda)) = lsdas.last_mut() {
+            // ` 0000 ff031501 10200100 ...  ascii`
+            let hex = line.get(6..41).unwrap_or_default();
+            let digits = hex.bytes().filter(u8::is_ascii_hexdigit).collect::<Vec<_>>();
+            lsda.extend(
+                digits.chunks(2).map(|byte| {
+                    u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap()
+                }),
+            );
+        }
+    }
+
+    let mut landing_pad_call_sites = lsdas
+        .into_iter()
+        .flatten()
+        .map(|lsda| lsda_landing_pad_call_sites(&lsda))
+        .collect::<Vec<_>>();
+    landing_pad_call_sites.sort();
+    ExceptionTables { fdes_with_personality, landing_pad_call_sites }
+}
+
+/// Returns the number of call site entries with a landing pad in an LSDA.
+fn lsda_landing_pad_call_sites(mut lsda: &[u8]) -> usize {
+    fn uleb128(bytes: &mut &[u8]) -> u64 {
+        let mut value = 0;
+        for shift in (0..).step_by(7) {
+            let (&byte, rest) = bytes.split_first().unwrap();
+            *bytes = rest;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                break;
+            }
+        }
+        value
+    }
+
+    let [lp_start_encoding, ttype_encoding, ..] = *lsda else { panic!("LSDA is too short") };
+    assert_eq!(lp_start_encoding, 0xff, "unexpected landing pad base");
+    lsda = &lsda[2..];
+    if ttype_encoding != 0xff {
+        uleb128(&mut lsda);
+    }
+    let call_site_encoding = lsda[0];
+    assert_eq!(call_site_encoding, 0x01, "unexpected call site encoding");
+    lsda = &lsda[1..];
+    let call_sites_len = usize::try_from(uleb128(&mut lsda)).unwrap();
+    let mut call_sites = &lsda[..call_sites_len];
+
+    let mut landing_pad_call_sites = 0;
+    while !call_sites.is_empty() {
+        let _start = uleb128(&mut call_sites);
+        let _length = uleb128(&mut call_sites);
+        let landing_pad = uleb128(&mut call_sites);
+        let _action = uleb128(&mut call_sites);
+        landing_pad_call_sites += usize::from(landing_pad != 0);
+    }
+    landing_pad_call_sites
 }

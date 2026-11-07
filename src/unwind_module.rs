@@ -17,8 +17,14 @@ pub(crate) struct UnwindModule<T> {
 }
 
 impl<T: Module> UnwindModule<T> {
-    pub(crate) fn new(mut module: T, eh_personality: &str, pic_eh_frame: bool) -> Self {
-        let unwind_context = UnwindContext::new(&mut module, eh_personality, pic_eh_frame);
+    pub(crate) fn new(
+        mut module: T,
+        eh_personality: &str,
+        pic_eh_frame: bool,
+        unwinding: bool,
+    ) -> Self {
+        let unwind_context =
+            UnwindContext::new(&mut module, eh_personality, pic_eh_frame, unwinding);
         UnwindModule { module, unwind_context }
     }
 }
