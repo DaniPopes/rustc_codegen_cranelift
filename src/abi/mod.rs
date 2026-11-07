@@ -842,15 +842,23 @@ pub(crate) fn codegen_terminator_call<'tcx>(
             )));
         }
 
+        // x86_64 System V passes an upper bound of the vector registers used in `al`.
+        let is_sysv_x86_64 =
+            fx.tcx.sess.target.arch == Arch::X86_64 && !fx.tcx.sess.target.is_like_windows;
+        if is_sysv_x86_64 {
+            let vector_regs = abi_params.iter().filter(|param| !param.value_type.is_int()).count();
+            abi_params.push(AbiParam::special(types::I32, ArgumentPurpose::VariadicVectorRegs));
+            call_args.push(fx.bcx.ins().iconst(types::I32, vector_regs.min(8) as i64));
+        }
+
         // Check all variadic parameters are integers, except where floats are passed in vector
         // registers exactly like fixed arguments.
-        let variadic_floats_in_registers = fx.tcx.sess.target.arch == Arch::AArch64
-            && !fx.tcx.sess.target.is_like_darwin
-            && !fx.tcx.sess.target.is_like_windows;
+        let variadic_floats_in_registers = is_sysv_x86_64
+            || (fx.tcx.sess.target.arch == Arch::AArch64
+                && !fx.tcx.sess.target.is_like_darwin
+                && !fx.tcx.sess.target.is_like_windows);
         for param in &abi_params[variadic_start..] {
             if !param.value_type.is_int() && !variadic_floats_in_registers {
-                // FIXME: x86_64 needs %al set to an upper bound of the vector registers used,
-                // which Cranelift can't express for a call.
                 fx.tcx.dcx().span_fatal(
                     source_info.span,
                     format!("Non int ty {:?} for variadic call", param.value_type),

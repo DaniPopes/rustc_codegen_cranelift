@@ -355,9 +355,6 @@ variadic_cases! {
     fn variadic_u128_after_six_u64(a: u32; u64, u64, u64, u64, u64, u64, u128, u64) -> ();
 }
 
-// Cranelift can't call variadic functions with float arguments on x86_64, as it can't set the
-// number of vector registers in `al`.
-#[cfg(variadic_float)]
 variadic_cases! {
     call_variadic_float_cases;
 
@@ -371,7 +368,7 @@ variadic_cases! {
     fn variadic_fixed_f16(a: f16, b: u16, c: i8; i32, f64) -> ();
 }
 
-#[cfg(all(variadic_float, not(any(target_vendor = "apple", target_env = "msvc"))))]
+#[cfg(all(variadic, not(any(target_vendor = "apple", target_env = "msvc"))))]
 variadic_cases! {
     call_variadic_f128_cases;
 
@@ -393,9 +390,6 @@ fn main() {
     {
         call_variadic_cases();
         call_variadic_i128_cases();
-    }
-    #[cfg(variadic_float)]
-    {
         call_variadic_float_cases();
         #[cfg(not(any(target_vendor = "apple", target_env = "msvc")))]
         call_variadic_f128_cases();

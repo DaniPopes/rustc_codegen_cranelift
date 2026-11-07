@@ -203,17 +203,13 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             let rustc = |backend: &str, args: &[&str]| {
                 let mut cmd =
                     runner.rustc_command_in(&out_dir, &runner.target_compiler.target, [source]);
-                cmd.arg("--check-cfg=cfg(callee, caller, variadic, variadic_float)");
+                cmd.arg("--check-cfg=cfg(callee, caller, variadic)");
                 if backend == "llvm" {
                     cmd.arg("-Zcodegen-backend=llvm");
                 }
                 // Cranelift can't define variadic functions.
                 if callee == "llvm" {
                     cmd.args(["--cfg", "variadic"]);
-                    // Cranelift can't call variadic functions with float arguments on x86_64.
-                    if caller == "llvm" || target.starts_with("aarch64") {
-                        cmd.args(["--cfg", "variadic_float"]);
-                    }
                 }
                 cmd.args(args);
                 spawn_and_wait(cmd);
