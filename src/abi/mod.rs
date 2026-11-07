@@ -111,13 +111,13 @@ fn is_tail_conv(c: CanonAbi) -> bool {
 }
 
 /// Whether `extern "tail"` functions use Cranelift's `tailcc` convention, which matches LLVM's.
-/// It doesn't support the Windows convention of x86_64. Elsewhere Cranelift's own `tail`
+/// It doesn't support the Windows conventions. Elsewhere Cranelift's own `tail`
 /// convention is used, which is not compatible with LLVM.
 fn uses_llvm_tailcc(sess: &Session, c: CanonAbi) -> bool {
     c == CanonAbi::RustTail
         && match sess.target.arch {
             Arch::X86_64 => !sess.target.is_like_windows,
-            Arch::AArch64 => true,
+            Arch::AArch64 => !sess.target.is_like_windows,
             _ => false,
         }
 }

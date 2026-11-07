@@ -34,6 +34,18 @@ pub(super) fn adjust_arg_abi_for_conv<'a, 'tcx>(
     arg_abi: &'a ArgAbi<'tcx, Ty<'tcx>>,
     conv: CanonAbi,
 ) -> Cow<'a, ArgAbi<'tcx, Ty<'tcx>>> {
+    if uses_llvm_tailcc(tcx.sess, conv) && tcx.sess.target.arch == Arch::X86_64 {
+        // Cranelift pops the arguments of `tailcc` on x86_64 with a 16 bit immediate.
+        if let PassMode::Indirect { mode: IndirectMode::OnStack, .. } = arg_abi.mode
+            && arg_abi.layout.size.bytes() >= 1 << 15
+        {
+            tcx.dcx().fatal(format!(
+                "`extern \"tail\"` argument of type `{}` is too large for Cranelift",
+                arg_abi.layout.ty
+            ));
+        }
+    }
+
     if !is_tail_conv(conv)
         || uses_llvm_tailcc(tcx.sess, conv)
         || !matches!(arg_abi.mode, PassMode::Indirect { mode: IndirectMode::OnStack, .. })
