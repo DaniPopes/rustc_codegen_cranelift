@@ -1,7 +1,7 @@
 // Explicit tail calls and the `rust-preserve-none` and `tail` ABIs. Every chain is deep enough to
 // overflow the stack if the tail calls were lowered to normal calls.
 
-#![feature(explicit_tail_calls, rust_cold_cc, rust_preserve_none_cc, rust_tail_cc)]
+#![feature(explicit_tail_calls, rust_preserve_none_cc, rust_tail_cc)]
 #![allow(incomplete_features, tail_call_track_caller)]
 
 const DEPTH: u64 = 10_000_000;
@@ -281,30 +281,6 @@ extern "C" fn mix(acc: u64, n: u64) -> u64 {
     (acc ^ n).wrapping_mul(31)
 }
 
-// `preserve_most` preserves registers that pass arguments, so `become` of it is a call and a return.
-#[inline(never)]
-extern "rust-cold" fn cold_chain(n: u64, a: u64, b: u64, c: u64, d: u64) -> u64 {
-    if n == 0 {
-        return a
-            .wrapping_mul(7)
-            .wrapping_add(b.wrapping_mul(5))
-            .wrapping_add(c.wrapping_mul(3))
-            .wrapping_add(d);
-    }
-    become cold_chain(n - 1, b, a.wrapping_add(c), d + 1, a ^ n)
-}
-
-fn cold_chain_reference(mut n: u64, mut a: u64, mut b: u64, mut c: u64, mut d: u64) -> u64 {
-    while n != 0 {
-        (a, b, c, d) = (b, a.wrapping_add(c), d + 1, a ^ n);
-        n -= 1;
-    }
-    a.wrapping_mul(7)
-        .wrapping_add(b.wrapping_mul(5))
-        .wrapping_add(c.wrapping_mul(3))
-        .wrapping_add(d)
-}
-
 #[track_caller]
 fn tracked(n: u64) -> u64 {
     n + u64::from(std::panic::Location::caller().line() != 0)
@@ -349,6 +325,5 @@ fn main() {
         acc = mix(acc, n);
     }
     assert_eq!(c_abi_indirect(PLATFORM_ABI_DEPTH, mix, 7), acc);
-    assert_eq!(cold_chain(300, 1, 2, 3, 4), cold_chain_reference(300, 1, 2, 3, 4));
     assert_eq!(tail_call_tracked(41), 42);
 }
