@@ -66,6 +66,51 @@ const NO_SYSROOT_SUITE: &[TestCase] = &[
         "example/mini_core_hello_world.rs",
         &["abc", "bcd"],
     ),
+    TestCase::custom("aot.native_cpu_macho_object", &|runner| {
+        // `-Ctarget-cpu=native` must keep the target triple instead of switching to the host's.
+        // Objects for Mach-O targets can be written on any host, so this runs everywhere.
+        for target in ["x86_64-apple-darwin", "aarch64-apple-darwin"] {
+            let compile = |target_cpu: Option<&str>| {
+                let out = BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join(format!(
+                    "native_cpu_macho_object_{target}_{}.o",
+                    target_cpu.unwrap_or("default")
+                ));
+                let mut cmd = Command::new(&runner.target_compiler.rustc);
+                cmd.args(&runner.target_compiler.rustflags);
+                cmd.args(["--target", target, "--crate-type", "lib", "--edition=2024"]);
+                cmd.args(["-Zforce-unstable-if-unmarked", "-Cpanic=abort", "--emit=obj"]);
+                if let Some(target_cpu) = target_cpu {
+                    cmd.arg(format!("-Ctarget-cpu={target_cpu}"));
+                }
+                cmd.arg("-o").arg(&out);
+                cmd.arg("example/mini_core.rs");
+                spawn_and_wait(cmd);
+                fs::read(out).unwrap()
+            };
+            let native = compile(Some("native"));
+            let default = compile(None);
+
+            assert_eq!(native[..4], [0xcf, 0xfa, 0xed, 0xfe], "{target}: not a 64-bit Mach-O");
+            assert_eq!(
+                native[4..12],
+                default[4..12],
+                "{target}: native object has another cpu type"
+            );
+            assert_eq!(
+                macho_min_os(&native),
+                macho_min_os(&default),
+                "{target}: native object has a different deployment target"
+            );
+            if target.starts_with("x86_64") {
+                // The object crate can't write the relocations that x86_64 Mach-O `__eh_frame`
+                // needs, so Apple's linker rejects objects with unwinding tables.
+                assert!(
+                    !native.windows(b"__eh_frame".len()).any(|window| window == b"__eh_frame"),
+                    "{target}: native object has an __eh_frame section"
+                );
+            }
+        }
+    }),
 ];
 
 const BASE_SYSROOT_SUITE: &[TestCase] = &[
@@ -445,6 +490,22 @@ const EXTENDED_SYSROOT_SUITE: &[TestCase] = &[
         spawn_and_wait(test_cmd);
     }),
 ];
+
+/// The `minos` field of the `LC_BUILD_VERSION` load command of a 64-bit little endian Mach-O file.
+fn macho_min_os(object: &[u8]) -> u32 {
+    const LC_BUILD_VERSION: u32 = 0x32;
+    let read_u32 =
+        |offset: usize| u32::from_le_bytes(object[offset..offset + 4].try_into().unwrap());
+
+    let mut offset = 32;
+    for _ in 0..read_u32(16) {
+        if read_u32(offset) == LC_BUILD_VERSION {
+            return read_u32(offset + 12);
+        }
+        offset += read_u32(offset + 4) as usize;
+    }
+    panic!("no LC_BUILD_VERSION load command");
+}
 
 pub(crate) fn run_tests(
     dirs: &Dirs,

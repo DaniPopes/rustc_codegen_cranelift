@@ -345,8 +345,17 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
     let flags = settings::Flags::new(flags_builder);
 
     let isa_builder = match sess.opts.cg.target_cpu.as_deref() {
-        Some(NATIVE_CPU) => cranelift_native::builder_with_options(true).unwrap(),
-        Some(value) => {
+        Some(NATIVE_CPU) if sess.target.arch == sess.host.arch => {
+            let mut builder =
+                cranelift_codegen::isa::lookup(target_tuple.clone()).unwrap_or_else(|err| {
+                    sess.dcx().fatal(format!("can't compile for {}: {}", target_tuple, err));
+                });
+            if let Err(err) = cranelift_native::infer_native_flags(&mut builder) {
+                sess.dcx().fatal(format!("failed to detect the host cpu features: {}", err));
+            }
+            builder
+        }
+        Some(value) if value != NATIVE_CPU => {
             let mut builder =
                 cranelift_codegen::isa::lookup(target_tuple.clone()).unwrap_or_else(|err| {
                     sess.dcx().fatal(format!("can't compile for {}: {}", target_tuple, err));
@@ -357,7 +366,8 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
             }
             builder
         }
-        None => {
+        // Like LLVM, ignore `native` when the target architecture isn't the host's.
+        Some(_) | None => {
             let mut builder =
                 cranelift_codegen::isa::lookup(target_tuple.clone()).unwrap_or_else(|err| {
                     sess.dcx().fatal(format!("can't compile for {}: {}", target_tuple, err));
