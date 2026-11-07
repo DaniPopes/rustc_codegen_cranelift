@@ -345,9 +345,7 @@ fn build_isa(sess: &Session, jit: bool) -> Arc<dyn TargetIsa + 'static> {
     let flags = settings::Flags::new(flags_builder);
 
     let isa_builder = match sess.opts.cg.target_cpu.as_deref() {
-        Some(NATIVE_CPU)
-            if target_tuple.architecture == target_lexicon::Triple::host().architecture =>
-        {
+        Some(NATIVE_CPU) if sess.target.arch == sess.host.arch => {
             let mut builder =
                 cranelift_codegen::isa::lookup(target_tuple.clone()).unwrap_or_else(|err| {
                     sess.dcx().fatal(format!("can't compile for {}: {}", target_tuple, err));

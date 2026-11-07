@@ -92,6 +92,11 @@ const NO_SYSROOT_SUITE: &[TestCase] = &[
 
             assert_eq!(native[..4], [0xcf, 0xfa, 0xed, 0xfe], "{target}: not a 64-bit Mach-O");
             assert_eq!(
+                native[4..12],
+                default[4..12],
+                "{target}: native object has another cpu type"
+            );
+            assert_eq!(
                 macho_min_os(&native),
                 macho_min_os(&default),
                 "{target}: native object has a different deployment target"
