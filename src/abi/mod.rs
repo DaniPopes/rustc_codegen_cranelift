@@ -93,10 +93,20 @@ pub(crate) fn conv_to_call_conv(
     }
 }
 
-/// Whether functions with this ABI use a Cranelift calling convention that supports `return_call`
-/// and `return_call_indirect`: `tail` or `preserve_none`.
+/// Whether functions with this ABI use Cranelift's `tail` or `preserve_none` calling convention,
+/// which pass some arguments differently from the platform's C calling convention.
 fn is_tail_conv(c: CanonAbi) -> bool {
     matches!(c, CanonAbi::RustPreserveNone | CanonAbi::RustTail)
+}
+
+/// Whether `become` of a function with this ABI can be lowered to Cranelift's `return_call` and
+/// `return_call_indirect`. Cranelift only supports them for the conventions where the caller pops
+/// the stack arguments on x86_64 and aarch64.
+fn supports_return_call(sess: &Session, c: CanonAbi, default_call_conv: CallConv) -> bool {
+    let call_conv = conv_to_call_conv(sess, c, default_call_conv);
+    call_conv == CallConv::Tail
+        || (call_conv.supports_tail_calls()
+            && matches!(sess.target.arch, Arch::X86_64 | Arch::AArch64))
 }
 
 pub(crate) fn get_function_sig<'tcx>(
@@ -674,10 +684,12 @@ pub(crate) fn codegen_terminator_call<'tcx>(
         }
     };
 
-    // FIXME(explicit_tail_calls): `become` with a calling convention other than `tail` is lowered
-    // to a regular call followed by a return, so it doesn't guarantee that the stack doesn't grow.
-    // Guaranteeing it requires Cranelift to support sibling calls for caller-pops conventions.
-    if kind == CallKind::Tail && is_tail_conv(fn_abi.conv) {
+    // FIXME(explicit_tail_calls): On targets other than x86_64 and aarch64 `become` of a function
+    // that doesn't use the `tail` calling convention is lowered to a regular call followed by a
+    // return, so it doesn't guarantee that the stack doesn't grow.
+    if kind == CallKind::Tail
+        && supports_return_call(fx.tcx.sess, fn_abi.conv, fx.target_config.default_call_conv)
+    {
         codegen_tail_call(fx, fn_abi, func_ref, first_arg_override, args);
         return;
     }
@@ -873,13 +885,13 @@ pub(crate) fn codegen_terminator_call<'tcx>(
     }
 }
 
-/// Lower `become` of a function using Cranelift's `tail` calling convention to `return_call` or
-/// `return_call_indirect`.
+/// Lower `become` to `return_call` or `return_call_indirect`.
 ///
-/// The caller and the callee have the same ABI, except when both use `extern "tail"`. Following
-/// `rustc_codegen_ssa`, a return value passed indirectly is written to the caller's own return
-/// place and arguments passed by pointer reuse the pointers the caller received, as the caller's
-/// stack frame is gone when the callee runs.
+/// The caller and the callee have the same ABI, except when both use `extern "tail"`. In the other
+/// ABIs the caller pops the stack arguments, and the arguments of the callee are written over the
+/// ones of the caller. Following `rustc_codegen_ssa`, a return value passed indirectly is written
+/// to the caller's own return place and arguments passed by pointer reuse the pointers the caller
+/// received, as the caller's stack frame is gone when the callee runs.
 fn codegen_tail_call<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     fn_abi: &FnAbi<'tcx, Ty<'tcx>>,
@@ -915,7 +927,15 @@ fn codegen_tail_call<'tcx>(
             continue;
         }
 
-        if matches!(arg_abi.mode, PassMode::Indirect { mode: IndirectMode::Pointer, .. }) {
+        let arg_mode = adjust_arg_abi_for_conv(fx.tcx, arg_abi, fn_abi.conv).mode.clone();
+        if matches!(arg_mode, PassMode::Indirect { mode: IndirectMode::OnStack, .. }) {
+            // Cranelift copies the argument into the caller's incoming argument area as part of
+            // the tail call, which may overwrite memory that this or another argument is read
+            // from. Pass a copy.
+            let tmp = CPlace::new_stack_slot(fx, arg.value.layout());
+            tmp.write_cvalue(fx, arg.value);
+            call_args.push(tmp.to_ptr().get_addr(fx));
+        } else if matches!(arg_abi.mode, PassMode::Indirect { mode: IndirectMode::Pointer, .. }) {
             if caller_arg_abi.is_none_or(|caller_arg_abi| caller_arg_abi.mode != arg_abi.mode) {
                 fx.tcx.dcx().fatal(
                     "tail calls passing arguments by pointer require the same argument \

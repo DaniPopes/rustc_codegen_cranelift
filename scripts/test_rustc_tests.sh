@@ -69,7 +69,6 @@ rm -r tests/run-make/target-specs # i686 not supported by Cranelift
 rm -r tests/run-make/mismatching-target-triples # same
 rm tests/ui/simd/simd-bitmask-notpow2.rs # non-pow-of-2 simd vector sizes
 rm tests/ui/attributes/fn-align-dyn.rs # per-function alignment not supported
-rm tests/ui/explicit-tail-calls/recursion-etc.rs # guaranteed tail calls with the Rust ABI
 rm -r tests/run-make/pointer-auth-link-with-c # pointer auth
 rm -r tests/ui/eii # EII not yet implemented
 rm -r tests/run-make/forced-unwind-terminate-pof # forced unwinding doesn't take precedence
