@@ -28,6 +28,7 @@ use smallvec::{SmallVec, smallvec};
 use self::pass_mode::*;
 pub(crate) use self::returning::codegen_return;
 use crate::base::codegen_unwind_terminate;
+use crate::common::UnwindPad;
 use crate::debuginfo::{EXCEPTION_HANDLER_CLEANUP, EXCEPTION_HANDLER_TERMINATE};
 use crate::prelude::*;
 
@@ -900,7 +901,19 @@ pub(crate) fn codegen_call_with_unwind_action(
                 target_block.unwrap_or(fallthrough_block),
                 &fallthrough_block_call_args,
             );
-            let pre_cleanup_block = fx.bcx.create_block();
+            let unwind_pad = match unwind {
+                UnwindAction::Cleanup(cleanup) => UnwindPad::Cleanup(cleanup),
+                UnwindAction::Terminate(reason) => UnwindPad::Terminate(reason.lang_item()),
+                UnwindAction::Continue | UnwindAction::Unreachable => unreachable!(),
+            };
+            let (pre_cleanup_block, new_pre_cleanup_block) = match fx.unwind_pads.get(&unwind_pad) {
+                Some(&block) => (block, false),
+                None => {
+                    let block = fx.bcx.create_block();
+                    fx.unwind_pads.insert(unwind_pad, block);
+                    (block, true)
+                }
+            };
             let pre_cleanup_block_call =
                 fx.bcx.func.dfg.block_call(pre_cleanup_block, &[BlockArg::TryCallExn(0)]);
             let handler_tag = match unwind {
@@ -926,23 +939,25 @@ pub(crate) fn codegen_call_with_unwind_action(
                 }
             }
 
-            fx.bcx.seal_block(pre_cleanup_block);
-            fx.bcx.switch_to_block(pre_cleanup_block);
-            fx.bcx.set_cold_block(pre_cleanup_block);
-            match unwind {
-                UnwindAction::Continue | UnwindAction::Unreachable => unreachable!(),
-                UnwindAction::Cleanup(cleanup) => {
-                    let exception_ptr =
+            if new_pre_cleanup_block {
+                // Sealed by `seal_all_blocks`, as later calls branch to this block too.
+                fx.bcx.switch_to_block(pre_cleanup_block);
+                fx.bcx.set_cold_block(pre_cleanup_block);
+                match unwind {
+                    UnwindAction::Continue | UnwindAction::Unreachable => unreachable!(),
+                    UnwindAction::Cleanup(cleanup) => {
+                        let exception_ptr =
+                            fx.bcx.append_block_param(pre_cleanup_block, fx.pointer_type);
+                        let exception_slot = fx.exception_slot();
+                        fx.bcx.ins().stack_store(fx.pointer_type, exception_ptr, exception_slot, 0);
+                        let cleanup_block = fx.get_block(cleanup);
+                        fx.bcx.ins().jump(cleanup_block, &[]);
+                    }
+                    UnwindAction::Terminate(reason) => {
                         fx.bcx.append_block_param(pre_cleanup_block, fx.pointer_type);
-                    fx.bcx.def_var(fx.exception_slot, exception_ptr);
-                    let cleanup_block = fx.get_block(cleanup);
-                    fx.bcx.ins().jump(cleanup_block, &[]);
-                }
-                UnwindAction::Terminate(reason) => {
-                    // FIXME dedup terminate blocks
-                    fx.bcx.append_block_param(pre_cleanup_block, fx.pointer_type);
 
-                    codegen_unwind_terminate(fx, span, reason);
+                        codegen_unwind_terminate(fx, span, reason);
+                    }
                 }
             }
 

@@ -1,6 +1,7 @@
 use cranelift_codegen::isa::TargetFrontendConfig;
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use rustc_abi::{Float, Integer, Primitive};
+use rustc_attr_ir::lang_items::LangItem;
 use rustc_index::IndexVec;
 use rustc_middle::ty::TypeFoldable;
 use rustc_middle::ty::layout::{
@@ -270,6 +271,12 @@ pub(crate) fn create_wrapper_function(
     module.define_function(wrapper_func_id, &mut ctx).unwrap();
 }
 
+#[derive(PartialEq, Eq, Hash)]
+pub(crate) enum UnwindPad {
+    Cleanup(BasicBlock),
+    Terminate(LangItem),
+}
+
 pub(crate) struct FunctionCx<'m, 'clif, 'tcx: 'm> {
     pub(crate) module: &'m mut dyn Module,
     pub(crate) debug_context: Option<&'clif mut DebugContext>,
@@ -292,8 +299,15 @@ pub(crate) struct FunctionCx<'m, 'clif, 'tcx: 'm> {
     /// When `#[track_caller]` is used, the implicit caller location is stored in this variable.
     pub(crate) caller_location: Option<CValue<'tcx>>,
 
-    /// During cleanup the exception pointer will be stored in this variable.
-    pub(crate) exception_slot: Variable,
+    /// During cleanup the exception pointer will be stored in this stack slot. A stack slot rather
+    /// than a variable lets all landing pads of one cleanup share a single address: the
+    /// exception pointer is stored right on entry, so it doesn't need a callee-saved register that
+    /// each call's landing pad would have to move it into.
+    pub(crate) exception_slot: Option<StackSlot>,
+
+    /// The landing pad of every cleanup block and terminate reason used so far, so calls with the
+    /// same unwind action share one and their call site entries can merge.
+    pub(crate) unwind_pads: FxHashMap<UnwindPad, Block>,
 
     pub(crate) clif_comments: crate::pretty_clif::CommentWriter,
 
@@ -362,6 +376,17 @@ impl<'tcx> FunctionCx<'_, '_, 'tcx> {
 
     pub(crate) fn clif_pair_type(&self, ty: Ty<'tcx>) -> Option<(Type, Type)> {
         clif_pair_type_from_ty(self.tcx, ty)
+    }
+
+    pub(crate) fn exception_slot(&mut self) -> StackSlot {
+        *self.exception_slot.get_or_insert_with(|| {
+            self.bcx.create_sized_stack_slot(StackSlotData {
+                kind: StackSlotKind::ExplicitSlot,
+                size: self.pointer_type.bytes(),
+                align_shift: self.pointer_type.bytes().ilog2().try_into().unwrap(),
+                key: None,
+            })
+        })
     }
 
     pub(crate) fn get_block(&self, bb: BasicBlock) -> Block {
