@@ -1,0 +1,6 @@
+@repr "i8"
+enum "EnumReprI8" {
+    "A"
+    "B"
+    "C"
+}

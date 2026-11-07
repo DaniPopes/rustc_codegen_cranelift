@@ -1,0 +1,4 @@
+tagged "ResultU64U32" {
+  Ok { _ "u64"; }
+  Err { _ "u32"; }
+}

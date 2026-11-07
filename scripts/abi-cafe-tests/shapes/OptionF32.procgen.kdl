@@ -1,0 +1,4 @@
+tagged "OptionF32" {
+  Some { _ "f32"; }
+  None
+}
