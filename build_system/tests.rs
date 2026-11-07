@@ -277,7 +277,8 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             let mut args = vec!["example/mixed-backend-abi.rs", "--crate-name"];
             args.push(&caller);
             args.extend(["--extern", &callee_extern, "--check-cfg=cfg(llvm_caller)"]);
-            if caller_flag.is_some() {
+            // Without Cranelift the default backend is LLVM too.
+            if caller_flag.is_some() || runner.default_backend_is_llvm {
                 args.extend(["--cfg", "llvm_caller"]);
             }
             args.extend(caller_flag);
@@ -617,6 +618,7 @@ pub(crate) fn run_tests(
             skip_tests,
             bootstrap_host_compiler.target == target_tuple,
             stdlib_source.clone(),
+            matches!(cg_clif_dylib, CodegenBackend::Builtin(name) if name == "llvm"),
         );
 
         let path = BUILD_EXAMPLE_OUT_DIR.to_path(dirs);
@@ -650,6 +652,7 @@ pub(crate) fn run_tests(
             skip_tests,
             bootstrap_host_compiler.target == target_tuple,
             stdlib_source,
+            matches!(cg_clif_dylib, CodegenBackend::Builtin(name) if name == "llvm"),
         );
 
         if run_base_sysroot {
@@ -704,6 +707,7 @@ struct TestRunner<'a> {
     dirs: Dirs,
     target_compiler: Compiler,
     stdlib_source: PathBuf,
+    default_backend_is_llvm: bool,
 }
 
 impl<'a> TestRunner<'a> {
@@ -715,6 +719,7 @@ impl<'a> TestRunner<'a> {
         skip_tests: &'a [&'a str],
         is_native: bool,
         stdlib_source: PathBuf,
+        default_backend_is_llvm: bool,
     ) -> Self {
         target_compiler.rustflags.extend(rustflags_from_env("RUSTFLAGS"));
         target_compiler.rustdocflags.extend(rustflags_from_env("RUSTDOCFLAGS"));
@@ -730,6 +735,7 @@ impl<'a> TestRunner<'a> {
             dirs,
             target_compiler,
             stdlib_source,
+            default_backend_is_llvm,
         }
     }
 
