@@ -1,0 +1,9 @@
+struct "NestedU32x2U64" {
+    _ "U32x2"
+    _ "u64"
+}
+
+struct "U32x2" {
+    _ "u32"
+    _ "u32"
+}

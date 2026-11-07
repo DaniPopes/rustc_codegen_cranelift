@@ -1,0 +1,14 @@
+struct "NestedMixed" {
+    _ "U8F32"
+    _ "F64U8"
+}
+
+struct "U8F32" {
+    _ "u8"
+    _ "f32"
+}
+
+struct "F64U8" {
+    _ "f64"
+    _ "u8"
+}

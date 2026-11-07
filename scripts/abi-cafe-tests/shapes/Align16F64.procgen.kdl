@@ -1,0 +1,4 @@
+@align 16
+struct "Align16F64" {
+    _ "f64"
+}

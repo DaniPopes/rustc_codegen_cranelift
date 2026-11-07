@@ -10,6 +10,7 @@ build.mini_core
 build.example
 jit.mini_core_hello_world
 aot.mini_core_hello_world
+aot.macho_many_custom_sections
 
 testsuite.base_sysroot
 aot.arbitrary_self_types_pointers_and_wrappers
@@ -18,13 +19,16 @@ aot.std_example
 aot.dst_field_align
 aot.subslice-patterns-const-eval
 aot.track-caller-attribute
+aot.tail-calls
 aot.float-minmax-pass
 aot.powi_libcall_signature
 aot.tls_conflicting_declarations
 aot.issue-72793
+aot.mixed_backend_abi
 aot.issue-59326
 aot.gen_block_iterate
 aot.raw-dylib
+aot.abi_conformance
 test.sysroot
 
 testsuite.extended_sysroot
