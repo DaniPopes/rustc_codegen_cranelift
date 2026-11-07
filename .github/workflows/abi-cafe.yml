@@ -13,7 +13,7 @@ permissions: {}
 concurrency:
   # A new push cancels the branch's or pull request's older runs. Each main run gets its own
   # group, so main runs are never cancelled, not even queued ones.
-  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 defaults:
