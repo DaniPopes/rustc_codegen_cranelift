@@ -87,6 +87,10 @@ pub(crate) fn conv_to_call_conv(
         CanonAbi::X86(x86_call) => match x86_call {
             X86Call::SysV64 => CallConv::SystemV,
             X86Call::Win64 => CallConv::WindowsFastcall,
+            X86Call::Vectorcall => sess.dcx().fatal(
+                "`extern \"vectorcall\"` is not supported by Cranelift, it has no matching \
+                 calling convention",
+            ),
             // Should already get a back compat warning
             _ => default_call_conv,
         },
