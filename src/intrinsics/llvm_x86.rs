@@ -1325,7 +1325,7 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
                 fx,
                 &[InlineAsmTemplatePiece::String("rdtsc".into())],
                 &[
-                    CInlineAsmOperand::Out {
+                    CInlineAsmOperand::<Value>::Out {
                         reg: InlineAsmRegOrRegClass::Reg(InlineAsmReg::X86(X86InlineAsmReg::ax)),
                         late: true,
                         place: Some(eax_place),

@@ -5,7 +5,6 @@ use std::fmt::Write;
 use cranelift_codegen::isa::CallConv;
 use rustc_abi::CanonAbi;
 use rustc_ast::ast::{InlineAsmOptions, InlineAsmTemplatePiece};
-use rustc_attr_ir::lang_items::LangItem;
 use rustc_middle::mir::interpret::{GlobalAlloc, PointerArithmetic, Scalar as ConstScalar};
 use rustc_middle::ty::layout::{FnAbiOf, HasTypingEnv as _};
 use rustc_span::sym;
@@ -15,28 +14,12 @@ use target_lexicon::BinaryFormat;
 
 use crate::prelude::*;
 
-pub(crate) enum CInlineAsmOperand<'tcx> {
-    In {
-        reg: InlineAsmRegOrRegClass,
-        value: Value,
-    },
-    Out {
-        reg: InlineAsmRegOrRegClass,
-        late: bool,
-        place: Option<CPlace<'tcx>>,
-    },
-    InOut {
-        reg: InlineAsmRegOrRegClass,
-        _late: bool,
-        in_value: Value,
-        out_place: Option<CPlace<'tcx>>,
-    },
-    Const {
-        value: String,
-    },
-    Symbol {
-        symbol: String,
-    },
+pub(crate) enum CInlineAsmOperand<'tcx, V> {
+    In { reg: InlineAsmRegOrRegClass, value: V },
+    Out { reg: InlineAsmRegOrRegClass, late: bool, place: Option<CPlace<'tcx>> },
+    InOut { reg: InlineAsmRegOrRegClass, _late: bool, in_value: V, out_place: Option<CPlace<'tcx>> },
+    Const { value: String },
+    Symbol { symbol: String },
 }
 
 pub(crate) fn codegen_inline_asm_terminator<'tcx>(
@@ -94,7 +77,6 @@ pub(crate) fn codegen_inline_asm_terminator<'tcx>(
                     any_input_uninhabited = true;
                     None
                 } else {
-                    let value = value.load_scalar(fx);
                     Some(CInlineAsmOperand::In { reg, value })
                 }
             }
@@ -109,7 +91,6 @@ pub(crate) fn codegen_inline_asm_terminator<'tcx>(
                     any_input_uninhabited = true;
                     None
                 } else {
-                    let in_value = in_value.load_scalar(fx);
                     Some(CInlineAsmOperand::InOut {
                         reg,
                         _late: late,
@@ -263,10 +244,10 @@ pub(crate) fn codegen_inline_asm_terminator<'tcx>(
     }
 }
 
-pub(crate) fn codegen_inline_asm_inner<'tcx>(
+pub(crate) fn codegen_inline_asm_inner<'tcx, V: AsmInput<'tcx>>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     template: &[InlineAsmTemplatePiece],
-    operands: &[CInlineAsmOperand<'tcx>],
+    operands: &[CInlineAsmOperand<'tcx, V>],
     options: InlineAsmOptions,
 ) {
     // FIXME add .eh_frame unwind info directives
@@ -323,12 +304,12 @@ pub(crate) fn codegen_inline_asm_inner<'tcx>(
     call_inline_asm(fx, &asm_name, asm_gen.stack_slot_size, inputs, outputs);
 }
 
-struct InlineAssemblyGenerator<'a, 'tcx> {
+struct InlineAssemblyGenerator<'a, 'tcx, V> {
     tcx: TyCtxt<'tcx>,
     arch: InlineAsmArch,
     enclosing_def_id: DefId,
     template: &'a [InlineAsmTemplatePiece],
-    operands: &'a [CInlineAsmOperand<'tcx>],
+    operands: &'a [CInlineAsmOperand<'tcx, V>],
     options: InlineAsmOptions,
     registers: Vec<Option<InlineAsmReg>>,
     stack_slots_clobber: Vec<Option<Size>>,
@@ -337,7 +318,7 @@ struct InlineAssemblyGenerator<'a, 'tcx> {
     stack_slot_size: Size,
 }
 
-impl<'tcx> InlineAssemblyGenerator<'_, 'tcx> {
+impl<'tcx, V> InlineAssemblyGenerator<'_, 'tcx, V> {
     fn allocate_registers(&mut self) {
         let sess = self.tcx.sess;
         let map = allocatable_registers(
@@ -597,7 +578,7 @@ impl<'tcx> InlineAssemblyGenerator<'_, 'tcx> {
                 .zip(self.stack_slots_clobber.iter().copied())
                 .filter_map(|(r, s)| r.zip(s))
             {
-                Self::save_register(&mut generated_asm, self.arch, reg, slot);
+                self.save_register(&mut generated_asm, reg, slot);
             }
         }
 
@@ -608,7 +589,7 @@ impl<'tcx> InlineAssemblyGenerator<'_, 'tcx> {
             .zip(self.stack_slots_input.iter().copied())
             .filter_map(|(r, s)| r.zip(s))
         {
-            Self::restore_register(&mut generated_asm, self.arch, reg, slot);
+            self.restore_register(&mut generated_asm, reg, slot);
         }
 
         if is_x86 && self.options.contains(InlineAsmOptions::ATT_SYNTAX) {
@@ -703,7 +684,7 @@ impl<'tcx> InlineAssemblyGenerator<'_, 'tcx> {
                 .zip(self.stack_slots_output.iter().copied())
                 .filter_map(|(r, s)| r.zip(s))
             {
-                Self::save_register(&mut generated_asm, self.arch, reg, slot);
+                self.save_register(&mut generated_asm, reg, slot);
             }
 
             // Restore clobbered registers
@@ -713,7 +694,7 @@ impl<'tcx> InlineAssemblyGenerator<'_, 'tcx> {
                 .zip(self.stack_slots_clobber.iter().copied())
                 .filter_map(|(r, s)| r.zip(s))
             {
-                Self::restore_register(&mut generated_asm, self.arch, reg, slot);
+                self.restore_register(&mut generated_asm, reg, slot);
             }
 
             Self::epilogue(&mut generated_asm, self.arch);
@@ -806,13 +787,18 @@ impl<'tcx> InlineAssemblyGenerator<'_, 'tcx> {
         }
     }
 
-    fn save_register(
-        generated_asm: &mut String,
-        arch: InlineAsmArch,
-        reg: InlineAsmReg,
-        offset: Size,
-    ) {
-        match arch {
+    /// The mnemonic for moving a mask register to and from memory. Saves the full 64 bits only
+    /// when `avx512bw` allows it, as `kmovq` is not available with just `avx512f`.
+    fn kmov(&self) -> &'static str {
+        if self.tcx.asm_target_features(self.enclosing_def_id).contains(&sym::avx512bw) {
+            "kmovq"
+        } else {
+            "kmovw"
+        }
+    }
+
+    fn save_register(&self, generated_asm: &mut String, reg: InlineAsmReg, offset: Size) {
+        match self.arch {
             InlineAsmArch::X86_64 => {
                 match reg {
                     InlineAsmReg::X86(reg)
@@ -828,6 +814,21 @@ impl<'tcx> InlineAssemblyGenerator<'_, 'tcx> {
                         let mov = if name.starts_with("xmm") { "movups" } else { "vmovups" };
                         write!(generated_asm, "    {mov} [rbx+0x{:x}], {name}", offset.bytes())
                             .unwrap();
+                    }
+                    InlineAsmReg::X86(reg)
+                        if matches!(
+                            reg.reg_class(),
+                            X86InlineAsmRegClass::kreg | X86InlineAsmRegClass::kreg0
+                        ) =>
+                    {
+                        write!(
+                            generated_asm,
+                            "    {} [rbx+0x{:x}], {}",
+                            self.kmov(),
+                            offset.bytes(),
+                            reg.name()
+                        )
+                        .unwrap();
                     }
                     _ => {
                         write!(generated_asm, "    mov [rbx+0x{:x}], ", offset.bytes()).unwrap();
@@ -852,17 +853,12 @@ impl<'tcx> InlineAssemblyGenerator<'_, 'tcx> {
                 reg.emit(generated_asm, InlineAsmArch::RiscV64, None).unwrap();
                 writeln!(generated_asm, ", 0x{:x}(s1)", offset.bytes()).unwrap();
             }
-            _ => unimplemented!("save_register for {:?}", arch),
+            _ => unimplemented!("save_register for {:?}", self.arch),
         }
     }
 
-    fn restore_register(
-        generated_asm: &mut String,
-        arch: InlineAsmArch,
-        reg: InlineAsmReg,
-        offset: Size,
-    ) {
-        match arch {
+    fn restore_register(&self, generated_asm: &mut String, reg: InlineAsmReg, offset: Size) {
+        match self.arch {
             InlineAsmArch::X86_64 => {
                 match reg {
                     InlineAsmReg::X86(reg)
@@ -877,6 +873,14 @@ impl<'tcx> InlineAssemblyGenerator<'_, 'tcx> {
                         let name = reg.name();
                         let mov = if name.starts_with("xmm") { "movups" } else { "vmovups" };
                         write!(generated_asm, "    {mov} {name}").unwrap();
+                    }
+                    InlineAsmReg::X86(reg)
+                        if matches!(
+                            reg.reg_class(),
+                            X86InlineAsmRegClass::kreg | X86InlineAsmRegClass::kreg0
+                        ) =>
+                    {
+                        write!(generated_asm, "    {} {}", self.kmov(), reg.name()).unwrap();
                     }
                     _ => {
                         generated_asm.push_str("    mov ");
@@ -901,16 +905,16 @@ impl<'tcx> InlineAssemblyGenerator<'_, 'tcx> {
                 reg.emit(generated_asm, InlineAsmArch::RiscV64, None).unwrap();
                 writeln!(generated_asm, ", 0x{:x}(s1)", offset.bytes()).unwrap();
             }
-            _ => unimplemented!("restore_register for {:?}", arch),
+            _ => unimplemented!("restore_register for {:?}", self.arch),
         }
     }
 }
 
-fn call_inline_asm<'tcx>(
+fn call_inline_asm<'tcx, V: AsmInput<'tcx>>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     asm_name: &str,
     slot_size: Size,
-    inputs: Vec<(Size, Value)>,
+    inputs: Vec<(Size, V)>,
     outputs: Vec<(Size, CPlace<'tcx>)>,
 ) {
     let stack_slot =
@@ -934,11 +938,8 @@ fn call_inline_asm<'tcx>(
     }
 
     for (offset, value) in inputs {
-        stack_slot.offset(fx, i32::try_from(offset.bytes()).unwrap().into()).store(
-            fx,
-            value,
-            MemFlagsData::trusted(),
-        );
+        let slot = stack_slot.offset(fx, i32::try_from(offset.bytes()).unwrap().into());
+        value.store(fx, slot);
     }
 
     let stack_slot_addr = stack_slot.get_addr(fx);
@@ -946,28 +947,25 @@ fn call_inline_asm<'tcx>(
     fx.bcx.ins().call(inline_asm_func, &[stack_slot_addr]);
 
     for (offset, place) in outputs {
-        let ty = if place.layout().ty.is_simd() {
-            let (lane_count, lane_type) = place.layout().ty.simd_size_and_type(fx.tcx);
-            asm_clif_type(fx, lane_type).unwrap().by(lane_count.try_into().unwrap()).unwrap()
-        } else {
-            asm_clif_type(fx, place.layout().ty).unwrap()
-        };
-        let value = stack_slot.offset(fx, i32::try_from(offset.bytes()).unwrap().into()).load(
-            fx,
-            ty,
-            MemFlagsData::trusted(),
-        );
-        place.write_cvalue(fx, CValue::by_val(value, place.layout()));
+        let slot = stack_slot.offset(fx, i32::try_from(offset.bytes()).unwrap().into());
+        place.write_cvalue(fx, CValue::by_ref(slot, place.layout()));
     }
 }
 
-fn asm_clif_type<'tcx>(fx: &FunctionCx<'_, '_, 'tcx>, ty: Ty<'tcx>) -> Option<types::Type> {
-    match ty.kind() {
-        // Adapted from https://github.com/rust-lang/rust/blob/df44a57fd29fca899ce473f85ed64efd0708dd7c/compiler/rustc_hir_typeck/src/inline_asm.rs#L180-L183
-        ty::Adt(adt, args) if fx.tcx.is_lang_item(adt.did(), LangItem::MaybeUninit) => {
-            let ty = args.type_at(0);
-            fx.clif_type(ty)
-        }
-        _ => fx.clif_type(ty),
+/// An input operand value that can be stored into the stack slot passed to the asm wrapper.
+pub(crate) trait AsmInput<'tcx>: Copy {
+    fn store(self, fx: &mut FunctionCx<'_, '_, 'tcx>, slot: Pointer);
+}
+
+impl AsmInput<'_> for Value {
+    fn store(self, fx: &mut FunctionCx<'_, '_, '_>, slot: Pointer) {
+        slot.store(fx, self, MemFlagsData::trusted());
+    }
+}
+
+/// Copies the operand through memory, as Cranelift has no SSA vector types wider than 128 bits.
+impl<'tcx> AsmInput<'tcx> for CValue<'tcx> {
+    fn store(self, fx: &mut FunctionCx<'_, '_, 'tcx>, slot: Pointer) {
+        CPlace::for_ptr(slot, self.layout()).write_cvalue(fx, self);
     }
 }
