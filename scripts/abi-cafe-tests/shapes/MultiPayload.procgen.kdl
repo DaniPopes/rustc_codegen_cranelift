@@ -1,0 +1,6 @@
+tagged "MultiPayload" {
+  A { _ "u8"; }
+  B { _ "u32"; _ "u32"; }
+  C { _ "u64"; _ "f64"; _ "u64"; }
+  D
+}

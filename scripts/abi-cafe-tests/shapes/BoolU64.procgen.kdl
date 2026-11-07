@@ -1,0 +1,4 @@
+struct "BoolU64" {
+    _ "bool"
+    _ "u64"
+}

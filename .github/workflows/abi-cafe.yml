@@ -16,7 +16,7 @@ env:
 jobs:
   abi_cafe:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 90
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.os }}-${{ matrix.env.TARGET_TUPLE }}
       cancel-in-progress: true

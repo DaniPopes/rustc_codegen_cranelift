@@ -1,0 +1,4 @@
+tagged "OptionF64" {
+  Some { _ "f64"; }
+  None
+}

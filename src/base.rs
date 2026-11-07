@@ -525,14 +525,24 @@ fn codegen_fn_body(fx: &mut FunctionCx<'_, '_, '_>, start_block: Block) {
                         *destination,
                         *target,
                         *unwind,
+                        crate::abi::CallKind::Normal,
                     )
                 });
             }
-            // FIXME(explicit_tail_calls): add support for tail calls to the cranelift backend, once cranelift supports tail calls
-            TerminatorKind::TailCall { fn_span, .. } => span_bug!(
-                *fn_span,
-                "tail calls are not yet supported in `rustc_codegen_cranelift` backend"
-            ),
+            TerminatorKind::TailCall { func, args, fn_span } => {
+                fx.tcx.prof.generic_activity("codegen call").run(|| {
+                    crate::abi::codegen_terminator_call(
+                        fx,
+                        mir::SourceInfo { span: *fn_span, ..source_info },
+                        func,
+                        args,
+                        Place::return_place(),
+                        None,
+                        UnwindAction::Unreachable,
+                        crate::abi::CallKind::Tail,
+                    )
+                });
+            }
             TerminatorKind::InlineAsm {
                 asm_macro: _,
                 template,

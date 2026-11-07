@@ -1,0 +1,4 @@
+tagged "OptionU8" {
+  Some { _ "u8"; }
+  None
+}

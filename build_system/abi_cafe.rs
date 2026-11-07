@@ -1,8 +1,13 @@
+use std::path::Path;
+
 use crate::build_sysroot::SysrootConfig;
 use crate::path::Dirs;
 use crate::prepare::GitRepo;
-use crate::utils::{CargoProject, Compiler, spawn_and_wait};
-use crate::{CodegenBackend, build_sysroot};
+use crate::utils::{CargoProject, Compiler};
+use crate::{CodegenBackend, abi_cafe_gen, build_sysroot};
+
+/// How many tests to run in one abi-cafe invocation.
+const TESTS_PER_RUN: usize = 16;
 
 static ABI_CAFE_REPO: GitRepo = GitRepo::github(
     "Gankra",
@@ -45,31 +50,68 @@ pub(crate) fn run(
             &["rustc_calls_cgclif", "cgclif_calls_rustc"]
         };
 
-    let mut cmd = ABI_CAFE.run(bootstrap_host_compiler, dirs);
-    cmd.arg("--");
+    let generated_tests = abi_cafe_gen::generate(dirs);
+    let mut tests = test_names(&ABI_CAFE.source_dir(dirs).join("include/tests"));
+    tests.extend(test_names(&generated_tests));
+    tests.sort();
 
-    cmd.arg("--debug");
+    // Every test builds two static libraries that each contain the standard library. Delete them
+    // after a few tests to keep the disk usage at a few GB instead of the tens of GB that all
+    // tests together take.
+    let temp_dir = ABI_CAFE.source_dir(dirs).join("target/temp");
+    let mut failed = false;
+    for chunk in tests.chunks(TESTS_PER_RUN) {
+        let mut cmd = ABI_CAFE.run(bootstrap_host_compiler, dirs);
+        cmd.arg("--");
 
-    cmd.arg("--rules").arg(dirs.source_dir.join("scripts/abi-cafe-rules.toml"));
+        cmd.arg("--debug");
 
-    // stdcall, vectorcall and such don't work yet
-    cmd.arg("--conventions").arg("c").arg("--conventions").arg("rust");
+        cmd.arg("--add-tests").arg(&generated_tests);
+        cmd.arg("--tests").arg(chunk.join(","));
 
-    for pair in pairs {
-        cmd.arg("--pairs").arg(pair);
+        cmd.arg("--rules").arg(dirs.source_dir.join("scripts/abi-cafe-rules.toml"));
+
+        // stdcall, vectorcall and such don't work yet
+        cmd.arg("--conventions").arg("c").arg("--conventions").arg("rust");
+
+        for pair in pairs {
+            cmd.arg("--pairs").arg(pair);
+        }
+
+        cmd.arg("--add-rustc-codegen-backend");
+        match cg_clif_dylib {
+            CodegenBackend::Local(path) => {
+                cmd.arg(format!("cgclif:{}", path.display()));
+            }
+            CodegenBackend::Builtin(name) => {
+                cmd.arg(format!("cgclif:{name}"));
+            }
+        }
+
+        cmd.current_dir(ABI_CAFE.source_dir(dirs));
+
+        failed |= !cmd.spawn().unwrap().wait().unwrap().success();
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
-    cmd.arg("--add-rustc-codegen-backend");
-    match cg_clif_dylib {
-        CodegenBackend::Local(path) => {
-            cmd.arg(format!("cgclif:{}", path.display()));
-        }
-        CodegenBackend::Builtin(name) => {
-            cmd.arg(format!("cgclif:{name}"));
+    if failed {
+        std::process::exit(1);
+    }
+}
+
+/// The names of the tests in a directory of abi-cafe test files.
+fn test_names(dir: &Path) -> Vec<String> {
+    let mut names = vec![];
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            names.extend(test_names(&path));
+        } else {
+            names.push(
+                path.file_name().unwrap().to_str().unwrap().split('.').next().unwrap().to_owned(),
+            );
         }
     }
-
-    cmd.current_dir(ABI_CAFE.source_dir(dirs));
-
-    spawn_and_wait(cmd);
+    names
 }
