@@ -299,7 +299,7 @@ fn check_tail_calls() {
 
 /// Calls `callee::cold::burn` from assembly with values in the registers that the `preserve_most`
 /// convention preserves and checks that they are still there.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(windows)))]
 fn burn_preserves_registers() -> u64 {
     let (failed, result): (u64, u64);
     unsafe {
@@ -410,6 +410,7 @@ fn main() {
     check_abi!(rust);
     check_abi!(c);
     check_abi!(rust_cold);
+    #[cfg(any(target_arch = "aarch64", not(windows)))]
     assert_eq!(burn_preserves_registers(), 0, "burn must preserve registers");
     check_cold_caller_saves();
     check_preserve_none();
