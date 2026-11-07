@@ -1,10 +1,20 @@
 name: CI
 
 on:
-  - push
-  - pull_request
+  # Branches with a pull request get CI from `pull_request`; also running it on `push` would test
+  # every pull request head twice. Run other branches by hand.
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
 
 permissions: {}
+
+concurrency:
+  # A new push cancels the branch's or pull request's older runs. Each main run gets its own
+  # group, so main runs are never cancelled, not even queued ones.
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 defaults:
   run:
@@ -55,7 +65,9 @@ jobs:
 
   test:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # The macOS Intel tests take 33-38 minutes, but some Intel runners are uniformly about 1.6x
+    # slower.
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 90 || 60 }}
 
     env:
       CG_CLIF_EXPENSIVE_CHECKS: 1
@@ -265,7 +277,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     needs: [todo_check, rustfmt, test, bench, dist]
 
     permissions:
