@@ -927,16 +927,14 @@ fn codegen_tail_call<'tcx>(
             continue;
         }
 
-        let arg_mode = adjust_arg_abi_for_conv(fx.tcx, arg_abi, fn_abi.conv).mode.clone();
-        if matches!(arg_mode, PassMode::Indirect { mode: IndirectMode::OnStack, .. }) {
-            // Cranelift copies the argument into the caller's incoming argument area as part of
-            // the tail call, which may overwrite memory that this or another argument is read
-            // from. Pass a copy.
-            let tmp = CPlace::new_stack_slot(fx, arg.value.layout());
-            tmp.write_cvalue(fx, arg.value);
-            call_args.push(tmp.to_ptr().get_addr(fx));
-        } else if matches!(arg_abi.mode, PassMode::Indirect { mode: IndirectMode::Pointer, .. }) {
-            if caller_arg_abi.is_none_or(|caller_arg_abi| caller_arg_abi.mode != arg_abi.mode) {
+        if matches!(arg_abi.mode, PassMode::Indirect { mode: IndirectMode::Pointer, .. }) {
+            // The attributes may differ, for example when the callee doesn't capture the pointer.
+            if !caller_arg_abi.is_some_and(|caller_arg_abi| {
+                matches!(
+                    caller_arg_abi.mode,
+                    PassMode::Indirect { mode: IndirectMode::Pointer, .. }
+                )
+            }) {
                 fx.tcx.dcx().fatal(
                     "tail calls passing arguments by pointer require the same argument \
                      pass mode in the caller and the callee",
@@ -949,7 +947,20 @@ fn codegen_tail_call<'tcx>(
             indirect_args.push((incoming_ptr, tmp));
             call_args.push(incoming_ptr);
         } else {
-            call_args.extend(adjust_arg_for_abi(fx, arg.value, arg_abi, fn_abi.conv, arg.is_owned));
+            // Cranelift copies an argument passed on the stack into the caller's incoming argument
+            // area as part of the tail call, which may overwrite memory that this or another
+            // argument is read from. Pass a copy.
+            let on_stack = matches!(
+                adjust_arg_abi_for_conv(fx.tcx, arg_abi, fn_abi.conv).mode,
+                PassMode::Indirect { mode: IndirectMode::OnStack, .. }
+            );
+            call_args.extend(adjust_arg_for_abi(
+                fx,
+                arg.value,
+                arg_abi,
+                fn_abi.conv,
+                arg.is_owned && !on_stack,
+            ));
         }
     }
 

@@ -6,6 +6,11 @@
 
 const DEPTH: u64 = 10_000_000;
 
+// Cranelift only has tail calls for the Rust and C ABIs on x86_64 and aarch64. Elsewhere `become`
+// with these ABIs is a normal call.
+const PLATFORM_ABI_DEPTH: u64 =
+    if cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) { DEPTH } else { 1000 };
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 #[repr(C)]
 struct Big([u64; 4]);
@@ -305,20 +310,20 @@ fn main() {
     assert_eq!(tail_ping(DEPTH, Huge([1; 12]), 7), 12 + 7 + DEPTH / 2);
     assert_eq!(tail_ret(DEPTH, 5), Huge([5 + DEPTH; 12]));
 
-    assert_eq!(rust_abi(DEPTH, a), Big([DEPTH, 1, 2, 3]));
+    assert_eq!(rust_abi(PLATFORM_ABI_DEPTH, a), Big([PLATFORM_ABI_DEPTH, 1, 2, 3]));
     let big = Huge([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     assert_eq!(
-        rust_abi_stack(DEPTH + 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, big),
-        rust_abi_stack_reference(DEPTH + 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, big),
+        rust_abi_stack(PLATFORM_ABI_DEPTH + 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, big),
+        rust_abi_stack_reference(PLATFORM_ABI_DEPTH + 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, big),
     );
     assert_eq!(
-        c_abi_stack(DEPTH + 1, 1, 2, 3, 4, 5, 6, 7, 8, big, Huge([9; 12])),
-        c_abi_stack_reference(DEPTH + 1, 1, 2, 3, 4, 5, 6, 7, 8, big, Huge([9; 12])),
+        c_abi_stack(PLATFORM_ABI_DEPTH + 1, 1, 2, 3, 4, 5, 6, 7, 8, big, Huge([9; 12])),
+        c_abi_stack_reference(PLATFORM_ABI_DEPTH + 1, 1, 2, 3, 4, 5, 6, 7, 8, big, Huge([9; 12])),
     );
     let mut acc = 7;
-    for n in (1..=DEPTH).rev() {
+    for n in (1..=PLATFORM_ABI_DEPTH).rev() {
         acc = mix(acc, n);
     }
-    assert_eq!(c_abi_indirect(DEPTH, mix, 7), acc);
+    assert_eq!(c_abi_indirect(PLATFORM_ABI_DEPTH, mix, 7), acc);
     assert_eq!(tail_call_tracked(41), 42);
 }
