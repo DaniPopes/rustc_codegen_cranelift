@@ -1,0 +1,4 @@
+struct "PtrU64" {
+    _ "ptr"
+    _ "u64"
+}

@@ -1,0 +1,4 @@
+tagged "OptionBool" {
+  Some { _ "bool"; }
+  None
+}

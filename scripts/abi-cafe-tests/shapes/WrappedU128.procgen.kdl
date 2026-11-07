@@ -1,0 +1,7 @@
+struct "WrappedU128" {
+    _ "Inner"
+}
+
+struct "Inner" {
+    _ "u128"
+}

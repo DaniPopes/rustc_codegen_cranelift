@@ -1,0 +1,4 @@
+@align 16
+struct "Align16U8" {
+    _ "u8"
+}
