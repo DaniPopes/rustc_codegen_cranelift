@@ -383,8 +383,9 @@ impl UnwindContext {
             while current < end {
                 let len = std::ptr::read::<u32>(current as *const u32) as usize;
 
-                // Skip over the CIE
-                if current != start {
+                // Skip over the CIEs, which have a zero CIE pointer. They are written before the
+                // first FDE that uses them. Also skip the terminator, which has length 0.
+                if len != 0 && std::ptr::read::<u32>(current.add(4) as *const u32) != 0 {
                     __register_frame(current);
                 }
 

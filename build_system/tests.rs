@@ -220,7 +220,10 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         }
     }),
     TestCase::custom("aot.unwind-lsda", &|runner| {
-        if !runner.panic_unwind_support || !runner.is_native {
+        if !runner.panic_unwind_support
+            || !runner.is_native
+            || !runner.target_compiler.target.contains("linux")
+        {
             eprintln!("[SKIP] unwind-lsda (unsupported target, panic=abort or cross compiling)");
             return;
         }
