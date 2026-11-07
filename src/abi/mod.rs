@@ -75,6 +75,7 @@ pub(crate) fn conv_to_call_conv(
             _ => CallConv::Tail,
         },
 
+        CanonAbi::RustTail if uses_llvm_tailcc(sess, c) => CallConv::Tailcc,
         // FIXME use a calling convention matching LLVM's `tailcc` for interop with LLVM codegen.
         CanonAbi::RustTail => CallConv::Tail,
 
@@ -103,6 +104,18 @@ pub(crate) fn conv_to_call_conv(
 /// which pass some arguments differently from the platform's C calling convention.
 fn is_tail_conv(c: CanonAbi) -> bool {
     matches!(c, CanonAbi::RustPreserveNone | CanonAbi::RustTail)
+}
+
+/// Whether `extern "tail"` functions use Cranelift's `tailcc` convention, which matches LLVM's.
+/// It doesn't support the Windows convention of x86_64. Elsewhere Cranelift's own `tail`
+/// convention is used, which is not compatible with LLVM.
+fn uses_llvm_tailcc(sess: &Session, c: CanonAbi) -> bool {
+    c == CanonAbi::RustTail
+        && match sess.target.arch {
+            Arch::X86_64 => !sess.target.is_like_windows,
+            Arch::AArch64 => true,
+            _ => false,
+        }
 }
 
 /// Whether `become` of a function with this ABI can be lowered to Cranelift's `return_call` and

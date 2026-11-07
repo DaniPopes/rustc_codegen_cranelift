@@ -1,7 +1,7 @@
 //! Callee half of a cross-backend ABI test: this crate is built with one codegen backend and
 //! called from `mixed-backend-abi.rs`, which is built with the other one.
 
-#![feature(explicit_tail_calls, rust_cold_cc, rust_preserve_none_cc)]
+#![feature(explicit_tail_calls, rust_cold_cc, rust_preserve_none_cc, rust_tail_cc)]
 #![allow(improper_ctypes_definitions, incomplete_features)]
 
 #[inline]
@@ -177,6 +177,7 @@ macro_rules! define_abi {
 define_abi!(rust, "Rust",);
 define_abi!(c, "C", #[repr(C)]);
 define_abi!(rust_cold, "rust-cold",);
+define_abi!(tail, "tail",);
 
 /// A function with the `preserve_most` convention on x86_64 and aarch64 that uses many registers,
 /// including the ones that the convention preserves and the vector ones that it doesn't.

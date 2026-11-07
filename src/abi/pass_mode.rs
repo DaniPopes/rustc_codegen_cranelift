@@ -11,7 +11,7 @@ use rustc_target::callconv::{
 use rustc_target::spec::Arch;
 use smallvec::{SmallVec, smallvec};
 
-use super::{ArgValue, is_tail_conv};
+use super::{ArgValue, is_tail_conv, uses_llvm_tailcc};
 use crate::prelude::*;
 use crate::value_and_place::assert_assignable;
 
@@ -25,15 +25,17 @@ pub(super) trait ArgAbiExt<'tcx> {
 }
 
 /// Cranelift's `tail` calling convention can't pass `PassMode::Indirect { mode: OnStack }`
-/// arguments as `StructArgument` (unsupported on aarch64 and incompatible with `return_call`), so
-/// pass them as a sequence of pointer sized integers instead. Cranelift puts those on the stack
-/// when they don't fit in registers and lets a tail call change the size of the argument area.
+/// arguments as `StructArgument`, so pass them as a sequence of pointer sized integers instead.
+/// Cranelift puts those on the stack when they don't fit in registers and lets a tail call change
+/// the size of the argument area. Its `tailcc` convention passes them like LLVM, always on the
+/// stack.
 pub(super) fn adjust_arg_abi_for_conv<'a, 'tcx>(
     tcx: TyCtxt<'tcx>,
     arg_abi: &'a ArgAbi<'tcx, Ty<'tcx>>,
     conv: CanonAbi,
 ) -> Cow<'a, ArgAbi<'tcx, Ty<'tcx>>> {
     if !is_tail_conv(conv)
+        || uses_llvm_tailcc(tcx.sess, conv)
         || !matches!(arg_abi.mode, PassMode::Indirect { mode: IndirectMode::OnStack, .. })
     {
         return Cow::Borrowed(arg_abi);
@@ -241,7 +243,7 @@ impl<'tcx> ArgAbiExt<'tcx> for ArgAbi<'tcx, Ty<'tcx>> {
                 // Cranelift's `tail` calling convention doesn't support `StructReturn` on aarch64.
                 // The return pointer is a plain first parameter for it. LLVM's `preserve_most`
                 // convention on x86_64 doesn't return the pointer in `rax`, which it preserves.
-                let purpose = if is_tail_conv(conv)
+                let purpose = if (is_tail_conv(conv) && !uses_llvm_tailcc(tcx.sess, conv))
                     || (conv == CanonAbi::RustCold && tcx.sess.target.arch == Arch::X86_64)
                 {
                     ArgumentPurpose::Normal

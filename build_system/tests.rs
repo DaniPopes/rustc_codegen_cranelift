@@ -276,7 +276,10 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             let callee_extern = format!("callee={}", callee_rlib.display());
             let mut args = vec!["example/mixed-backend-abi.rs", "--crate-name"];
             args.push(&caller);
-            args.extend(["--extern", &callee_extern]);
+            args.extend(["--extern", &callee_extern, "--check-cfg=cfg(llvm_caller)"]);
+            if caller_flag.is_some() {
+                args.extend(["--cfg", "llvm_caller"]);
+            }
             args.extend(caller_flag);
             runner.run_rustc(args);
             runner.run_out_command(&caller, &[]);

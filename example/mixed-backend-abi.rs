@@ -70,8 +70,23 @@ macro_rules! check_many_args {
     }};
 }
 
+/// Like `check!`, but only when `$full` is set.
+macro_rules! check_full {
+    ($full:expr, $($check:tt)*) => {
+        if $full {
+            check!($($check)*);
+        }
+    };
+}
+
+/// With `$full` unset the functions that take an `i128` or an aggregate containing one are not
+/// checked. A caller that LLVM compiled assumes that such an `extern "tail"` function pops more
+/// bytes than the function does, so LLVM disagrees with itself.
 macro_rules! check_abi {
-    ($module:ident) => {{
+    ($module:ident) => {
+        check_abi!($module, true)
+    };
+    ($module:ident, $full:expr) => {{
         use callee::$module::*;
 
         let x = black_box(0x0123_4567_89ab_cdef_0fed_cba9_8765_4321u128);
@@ -81,30 +96,50 @@ macro_rules! check_abi {
         let w = Wide(x, 11);
         let n = Narrow(12, y);
 
-        check!($module, five_ints_i128_int(a, b, c, d, e, x, 9), mix(&[a, b, c, d, e, fold(x), 9]));
-        check!(
+        check_full!(
+            $full,
+            $module,
+            five_ints_i128_int(a, b, c, d, e, x, 9),
+            mix(&[a, b, c, d, e, fold(x), 9])
+        );
+        check_full!(
+            $full,
             $module,
             seven_ints_i128_int(a, b, c, d, e, f, g, x, 9),
             mix(&[a, b, c, d, e, f, g, fold(x), 9])
         );
-        check!($module, int_i128_int_i128_int(a, x, b, y, c), mix(&[a, fold(x), b, fold(y), c]));
-        check!($module, four_ints_wide_int(a, b, c, d, w, 13), mix(&[a, b, c, d, fold(x), 11, 13]));
-        check!(
+        check_full!(
+            $full,
+            $module,
+            int_i128_int_i128_int(a, x, b, y, c),
+            mix(&[a, fold(x), b, fold(y), c])
+        );
+        check_full!(
+            $full,
+            $module,
+            four_ints_wide_int(a, b, c, d, w, 13),
+            mix(&[a, b, c, d, fold(x), 11, 13])
+        );
+        check_full!(
+            $full,
             $module,
             five_ints_wide_int(a, b, c, d, e, w, 13),
             mix(&[a, b, c, d, e, fold(x), 11, 13])
         );
-        check!(
+        check_full!(
+            $full,
             $module,
             four_ints_narrow_int(a, b, c, d, n, 13),
             mix(&[a, b, c, d, 12, fold(y), 13])
         );
-        check!(
+        check_full!(
+            $full,
             $module,
             five_ints_narrow_int(a, b, c, d, e, n, 13),
             mix(&[a, b, c, d, e, 12, fold(y), 13])
         );
-        check!(
+        check_full!(
+            $full,
             $module,
             stack_alignment(a, b, c, d, e, f, g, h, i, x, j, y),
             mix(&[a, b, c, d, e, f, g, h, i as u64, fold(x), j as u64, fold(y)])
@@ -115,37 +150,44 @@ macro_rules! check_abi {
         let (u8_u128, u128_f64) = (U8U128(i, y), U128F64(x, 1.5));
         let union = U128Union { x: y };
 
-        check!(
+        check_full!(
+            $full,
             $module,
             seven_ints_wide_int(a, b, c, d, e, f, g, w, 13),
             mix(&[a, b, c, d, e, f, g, fold(x) ^ 11, 13])
         );
-        check!(
+        check_full!(
+            $full,
             $module,
             seven_ints_narrow_int(a, b, c, d, e, f, g, n, 13),
             mix(&[a, b, c, d, e, f, g, 12 ^ fold(y), 13])
         );
-        check!(
+        check_full!(
+            $full,
             $module,
             seven_ints_align16_int(a, b, c, d, e, f, g, a16, 13),
             mix(&[a, b, c, d, e, f, g, a ^ b, 13])
         );
-        check!(
+        check_full!(
+            $full,
             $module,
             seven_ints_wrap_int(a, b, c, d, e, f, g, wrap, 13),
             mix(&[a, b, c, d, e, f, g, fold(x), 13])
         );
-        check!(
+        check_full!(
+            $full,
             $module,
             seven_ints_u8_u128_int(a, b, c, d, e, f, g, u8_u128, 13),
             mix(&[a, b, c, d, e, f, g, i as u64 ^ fold(y), 13])
         );
-        check!(
+        check_full!(
+            $full,
             $module,
             seven_ints_u128_f64_int(a, b, c, d, e, f, g, u128_f64, 13),
             mix(&[a, b, c, d, e, f, g, fold(x) ^ 1.5f64.to_bits(), 13])
         );
-        check!(
+        check_full!(
+            $full,
             $module,
             seven_ints_union_int(a, b, c, d, e, f, g, union, 13),
             mix(&[a, b, c, d, e, f, g, fold(y), 13])
@@ -410,6 +452,7 @@ fn main() {
     check_abi!(rust);
     check_abi!(c);
     check_abi!(rust_cold);
+    check_abi!(tail, !cfg!(llvm_caller));
     #[cfg(any(target_arch = "aarch64", not(windows)))]
     assert_eq!(burn_preserves_registers(), 0, "burn must preserve registers");
     check_cold_caller_saves();
