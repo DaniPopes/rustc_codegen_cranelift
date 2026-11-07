@@ -52,6 +52,8 @@ fn make_module(tcx: TyCtxt<'_>, cgu_name: &str) -> AotModule {
     )
     .unwrap();
 
+    builder.symbolless_anonymous_data(true);
+
     // Disable function sections by default on MSVC as it causes significant slowdowns with link.exe.
     // Maybe link.exe has exponential behavior when there are many sections with the same name? Also
     // explicitly disable it on MinGW as rustc already disables it by default on MinGW and as such
