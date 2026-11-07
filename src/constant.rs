@@ -1,22 +1,29 @@
 //! Handling of `static`s, `const`s and promoted allocations
 
 use std::cmp::Ordering;
+use std::ffi::CStr;
 
 use cranelift_module::*;
 use rustc_const_eval::interpret::CTFE_ALLOC_SALT;
-use rustc_data_structures::fx::FxHashSet;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
 use rustc_middle::mir::interpret::{
-    AllocId, GlobalAlloc, PointerArithmetic, Scalar, read_target_uint,
+    AllocId, ConstAllocation, GlobalAlloc, PointerArithmetic, Scalar, alloc_range, read_target_uint,
 };
 use rustc_middle::ty::layout::HasTypingEnv as _;
 use rustc_middle::ty::{ExistentialTraitRef, ScalarInt};
 
 use crate::prelude::*;
 
-pub(crate) struct ConstantCx {
+/// The anonymous data of a codegen unit. It is shared by all of the functions and statics of the
+/// unit, so that each allocation is defined once.
+pub(crate) struct ConstantCx<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    /// The items to define, each pushed once.
     todo: Vec<TodoItem>,
     anon_allocs: FxHashMap<AllocId, DataId>,
+    /// The data of the immutable allocations, which share it when their contents are equal, like
+    /// the constants of an LLVM module.
+    immutable_allocs: FxHashMap<ConstAllocation<'tcx>, DataId>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -25,20 +32,30 @@ enum TodoItem {
     Static(DefId),
 }
 
-impl ConstantCx {
-    pub(crate) fn new() -> Self {
-        ConstantCx { todo: vec![], anon_allocs: FxHashMap::default() }
+impl<'tcx> ConstantCx<'tcx> {
+    pub(crate) fn new(tcx: TyCtxt<'tcx>) -> Self {
+        ConstantCx {
+            tcx,
+            todo: vec![],
+            anon_allocs: FxHashMap::default(),
+            immutable_allocs: FxHashMap::default(),
+        }
     }
 
-    pub(crate) fn finalize(mut self, tcx: TyCtxt<'_>, module: &mut dyn Module) {
-        define_all_allocs(tcx, module, &mut self);
+    /// Define the data that has been used so far.
+    pub(crate) fn finalize(&mut self, module: &mut dyn Module) {
+        define_all_allocs(self.tcx, module, self);
     }
 }
 
-pub(crate) fn codegen_static(tcx: TyCtxt<'_>, module: &mut dyn Module, def_id: DefId) -> DataId {
-    let mut constants_cx = ConstantCx::new();
+pub(crate) fn codegen_static<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    constants_cx: &mut ConstantCx<'tcx>,
+    module: &mut dyn Module,
+    def_id: DefId,
+) -> DataId {
     constants_cx.todo.push(TodoItem::Static(def_id));
-    constants_cx.finalize(tcx, module);
+    constants_cx.finalize(module);
 
     data_id_for_static(
         tcx, module, def_id, false,
@@ -144,12 +161,8 @@ pub(crate) fn codegen_const_value<'tcx>(
                         if alloc.inner().len() == 0 {
                             fx.bcx.ins().iconst(fx.pointer_type, alloc.inner().align.bytes() as i64)
                         } else {
-                            let data_id = data_id_for_alloc_id(
-                                &mut fx.constants_cx,
-                                fx.module,
-                                alloc_id,
-                                alloc.inner().mutability,
-                            );
+                            let data_id =
+                                data_id_for_alloc_id(fx.constants_cx, fx.module, alloc_id);
                             let local_data_id =
                                 fx.module.declare_data_in_func(data_id, fx.bcx.func);
                             if fx.clif_comments.enabled() {
@@ -166,7 +179,7 @@ pub(crate) fn codegen_const_value<'tcx>(
                     GlobalAlloc::VTable(ty, dyn_ty) => {
                         let data_id = data_id_for_vtable(
                             fx.tcx,
-                            &mut fx.constants_cx,
+                            fx.constants_cx,
                             fx.module,
                             ty,
                             dyn_ty.principal().map(|principal| {
@@ -231,9 +244,7 @@ pub(crate) fn codegen_const_value<'tcx>(
 }
 
 fn pointer_for_allocation<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, alloc_id: AllocId) -> Value {
-    let alloc = fx.tcx.global_alloc(alloc_id).unwrap_memory();
-    let data_id =
-        data_id_for_alloc_id(&mut fx.constants_cx, fx.module, alloc_id, alloc.inner().mutability);
+    let data_id = data_id_for_alloc_id(fx.constants_cx, fx.module, alloc_id);
 
     let local_data_id = fx.module.declare_data_in_func(data_id, fx.bcx.func);
     if fx.clif_comments.enabled() {
@@ -242,27 +253,34 @@ fn pointer_for_allocation<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, alloc_id: All
     fx.bcx.ins().symbol_value(fx.pointer_type, local_data_id)
 }
 
-pub(crate) fn data_id_for_alloc_id(
-    cx: &mut ConstantCx,
+pub(crate) fn data_id_for_alloc_id<'tcx>(
+    cx: &mut ConstantCx<'tcx>,
     module: &mut dyn Module,
     alloc_id: AllocId,
-    mutability: rustc_hir::Mutability,
 ) -> DataId {
-    cx.todo.push(TodoItem::Alloc(alloc_id));
-    *cx.anon_allocs
-        .entry(alloc_id)
-        .or_insert_with(|| module.declare_anonymous_data(mutability.is_mut(), false).unwrap())
+    *cx.anon_allocs.entry(alloc_id).or_insert_with(|| {
+        let alloc = cx.tcx.global_alloc(alloc_id).unwrap_memory();
+        let mut declare = || {
+            cx.todo.push(TodoItem::Alloc(alloc_id));
+            module.declare_anonymous_data(alloc.inner().mutability.is_mut(), false).unwrap()
+        };
+        if alloc.inner().mutability.is_mut() {
+            declare()
+        } else {
+            *cx.immutable_allocs.entry(alloc).or_insert_with(declare)
+        }
+    })
 }
 
 pub(crate) fn data_id_for_vtable<'tcx>(
     tcx: TyCtxt<'tcx>,
-    cx: &mut ConstantCx,
+    cx: &mut ConstantCx<'tcx>,
     module: &mut dyn Module,
     ty: Ty<'tcx>,
     trait_ref: Option<ExistentialTraitRef<'tcx>>,
 ) -> DataId {
     let alloc_id = tcx.vtable_allocation((ty, trait_ref));
-    data_id_for_alloc_id(cx, module, alloc_id, Mutability::Not)
+    data_id_for_alloc_id(cx, module, alloc_id)
 }
 
 pub(crate) fn pointer_for_anonymous_str(fx: &mut FunctionCx<'_, '_, '_>, msg: &str) -> Value {
@@ -373,13 +391,8 @@ fn data_id_for_static(
     }
 }
 
-fn define_all_allocs(tcx: TyCtxt<'_>, module: &mut dyn Module, cx: &mut ConstantCx) {
-    let mut done = FxHashSet::default();
+fn define_all_allocs<'tcx>(tcx: TyCtxt<'tcx>, module: &mut dyn Module, cx: &mut ConstantCx<'tcx>) {
     while let Some(todo_item) = cx.todo.pop() {
-        if !done.insert(todo_item) {
-            continue;
-        }
-
         let mut data = DataDescription::new();
 
         let (data_id, alloc, section_name) = match todo_item {
@@ -393,10 +406,7 @@ fn define_all_allocs(tcx: TyCtxt<'_>, module: &mut dyn Module, cx: &mut Constant
                         unreachable!()
                     }
                 };
-                // FIXME: should we have a cache so we don't do this multiple times for the same `ConstAllocation`?
-                let data_id = *cx.anon_allocs.entry(alloc_id).or_insert_with(|| {
-                    module.declare_anonymous_data(alloc.inner().mutability.is_mut(), false).unwrap()
-                });
+                let data_id = cx.anon_allocs[&alloc_id];
                 (data_id, alloc, None)
             }
             TodoItem::Static(def_id) => {
@@ -426,6 +436,15 @@ fn define_all_allocs(tcx: TyCtxt<'_>, module: &mut dyn Module, cx: &mut Constant
         }
 
         let bytes = alloc.inspect_with_uninit_and_ptr_outside_interpreter(0..alloc.len()).to_vec();
+        // Like LLVM, let the linker merge identical C strings between object files.
+        if let TodoItem::Alloc(_) = todo_item
+            && alloc.mutability == Mutability::Not
+            && alloc.provenance().ptrs().is_empty()
+            && alloc.init_mask().is_range_initialized(alloc_range(Size::ZERO, alloc.size())).is_ok()
+            && CStr::from_bytes_with_nul(&bytes).is_ok()
+        {
+            data.set_mergeable_cstring(true);
+        }
         data.define(bytes.into_boxed_slice());
 
         for &(offset, prov) in alloc.provenance().ptrs().iter() {
@@ -449,9 +468,7 @@ fn define_all_allocs(tcx: TyCtxt<'_>, module: &mut dyn Module, cx: &mut Constant
                     data.write_function_addr(offset.bytes() as u32, local_func_id);
                     continue;
                 }
-                GlobalAlloc::Memory(target_alloc) => {
-                    data_id_for_alloc_id(cx, module, alloc_id, target_alloc.inner().mutability)
-                }
+                GlobalAlloc::Memory(_) => data_id_for_alloc_id(cx, module, alloc_id),
                 GlobalAlloc::VTable(ty, dyn_ty) => data_id_for_vtable(
                     tcx,
                     cx,

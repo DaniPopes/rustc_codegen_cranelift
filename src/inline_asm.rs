@@ -157,12 +157,11 @@ pub(crate) fn codegen_inline_asm_terminator<'tcx>(
                             GlobalAlloc::Static(def_id) => {
                                 fx.tcx.symbol_name(Instance::mono(fx.tcx, def_id)).name.to_owned()
                             }
-                            GlobalAlloc::Memory(alloc) => {
+                            GlobalAlloc::Memory(_) => {
                                 let data_id = crate::constant::data_id_for_alloc_id(
-                                    &mut fx.constants_cx,
+                                    fx.constants_cx,
                                     fx.module,
                                     alloc_id,
-                                    alloc.inner().mutability,
                                 );
                                 fx.module
                                     .declarations()

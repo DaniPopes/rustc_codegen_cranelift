@@ -67,16 +67,23 @@ impl WriteDebugInfo for ObjectProduct {
         let (symbol, symbol_offset) = match reloc.name {
             DebugRelocName::Section(id) => (section_map.get(&id).unwrap().1, 0),
             DebugRelocName::Symbol(id) => {
-                let id = id.try_into().unwrap();
-                let symbol_id = if id & 1 << 31 == 0 {
-                    self.function_symbol(FuncId::from_u32(id))
+                let id: u32 = id.try_into().unwrap();
+                let data_id = (id & 1 << 31 != 0).then(|| DataId::from_u32(id & !(1 << 31)));
+                // Anonymous data has no symbol on ELF.
+                if let Some(location) =
+                    data_id.and_then(|data_id| self.symbolless_data_location(data_id))
+                {
+                    location
                 } else {
-                    self.data_symbol(DataId::from_u32(id & !(1 << 31)))
-                };
-                if use_section_symbol {
-                    self.object.symbol_section_and_offset(symbol_id).unwrap_or((symbol_id, 0))
-                } else {
-                    (symbol_id, 0)
+                    let symbol_id = match data_id {
+                        Some(data_id) => self.data_symbol(data_id),
+                        None => self.function_symbol(FuncId::from_u32(id)),
+                    };
+                    if use_section_symbol {
+                        self.object.symbol_section_and_offset(symbol_id).unwrap_or((symbol_id, 0))
+                    } else {
+                        (symbol_id, 0)
+                    }
                 }
             }
         };
