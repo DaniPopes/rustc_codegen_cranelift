@@ -21,6 +21,7 @@ extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_log;
 extern crate rustc_middle;
+extern crate rustc_mir_dataflow;
 extern crate rustc_session;
 extern crate rustc_span;
 #[cfg(feature = "jit")]

@@ -611,6 +611,25 @@ impl<'tcx> CPlace<'tcx> {
                         }
                     },
                     CValueInner::ByRef(from_ptr, None) => {
+                        // Locals that share a stack slot may already hold the value.
+                        let (from_base, from_offset) = from_ptr.debug_base_and_offset();
+                        let (to_base, to_offset) = to_ptr.debug_base_and_offset();
+                        if from_offset == to_offset
+                            && match (from_base, to_base) {
+                                (
+                                    crate::pointer::PointerBase::Stack(from),
+                                    crate::pointer::PointerBase::Stack(to),
+                                ) => from == to,
+                                (
+                                    crate::pointer::PointerBase::Addr(from),
+                                    crate::pointer::PointerBase::Addr(to),
+                                ) => from == to,
+                                _ => false,
+                            }
+                        {
+                            return;
+                        }
+
                         match from.layout().backend_repr {
                             BackendRepr::Scalar(_) => {
                                 let val = from.load_scalar(fx);

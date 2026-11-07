@@ -25,6 +25,9 @@ aot.issue-72793
 aot.issue-59326
 aot.gen_block_iterate
 aot.raw-dylib
+aot.stack-slot-sharing
+aot.slot-coalescing
+aot.deref-borrow-ssa
 test.sysroot
 
 testsuite.extended_sysroot

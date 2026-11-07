@@ -149,6 +149,44 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
     TestCase::build_bin_and_run("aot.raw-dylib", "example/raw-dylib.rs", &[]),
+    TestCase::custom("aot.stack-slot-sharing", &|runner| {
+        // Storage markers, which slot sharing relies on, are only kept when optimizing.
+        runner.run_rustc(["example/stack-slot-sharing.rs", "-Copt-level=1"]);
+        runner.run_out_command("stack-slot-sharing", &[]);
+    }),
+    TestCase::custom("aot.slot-coalescing", &|runner| {
+        let run = |flags: &[&str]| {
+            runner
+                .run_rustc(["example/slot-coalescing.rs"].into_iter().chain(flags.iter().copied()));
+            runner.run_out_command("slot-coalescing", &[]);
+        };
+        run(&["-Copt-level=0"]);
+        run(&["-Copt-level=1"]);
+        run(&["-Copt-level=3"]);
+        // MIR optimizations merge most moves between locals, so turn them off.
+        run(&["-Copt-level=1", "-Zmir-enable-passes=-DestinationPropagation"]);
+    }),
+    TestCase::custom("aot.deref-borrow-ssa", &|runner| {
+        let clif = BUILD_EXAMPLE_OUT_DIR
+            .to_path(&runner.dirs)
+            .join("deref-borrow-ssa.clif")
+            .join("borrow_field.unopt.clif");
+        // Don't read the CLIF of an earlier run.
+        let _ = fs::remove_file(&clif);
+
+        let mut cmd = runner.rustc_command([
+            "example/deref-borrow-ssa.rs",
+            "-Copt-level=0",
+            // Dump the CLIF. rustc fails to find the LLVM IR afterwards, which doesn't matter.
+            "--emit=llvm-ir",
+        ]);
+        let output = cmd.output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        let clif = fs::read_to_string(clif)
+            .unwrap_or_else(|err| panic!("failed to read the CLIF: {err}\n{stderr}"));
+        assert!(!clif.contains("explicit_slot"), "`self` is in a stack slot:\n{clif}");
+    }),
     TestCase::custom("test.sysroot", &|runner| {
         apply_patches(
             &runner.dirs,
