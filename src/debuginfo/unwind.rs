@@ -38,8 +38,10 @@ pub(crate) const EXCEPTION_HANDLER_TERMINATE: u32 = 2;
 pub(crate) struct UnwindContext {
     endian: RunTimeEndian,
     frame_table: FrameTable,
+    /// The CIE of functions without landing pads: no personality function and no LSDA.
     cie_id: Option<CieId>,
-    unwinding: bool,
+    /// The CIE of functions with landing pads, if unwinding is enabled.
+    personality_cie_id: Option<CieId>,
 }
 
 impl UnwindContext {
@@ -55,7 +57,8 @@ impl UnwindContext {
         };
         let mut frame_table = FrameTable::default();
 
-        let cie_id = if let Some(mut cie) = module.isa().create_systemv_cie() {
+        let (cie_id, personality_cie_id) = if let Some(mut cie) = module.isa().create_systemv_cie()
+        {
             let ptr_encoding = if !pic_eh_frame {
                 gimli::DW_EH_PE_absptr
             } else if module.isa().triple().binary_format == BinaryFormat::Macho {
@@ -67,8 +70,9 @@ impl UnwindContext {
 
             cie.fde_address_encoding = ptr_encoding;
 
-            // FIXME only add personality function and lsda when necessary: https://github.com/rust-lang/rust/blob/1f76d219c906f0112bb1872f33aa977164c53fa6/compiler/rustc_codegen_ssa/src/mir/mod.rs#L200-L204
-            if unwinding {
+            let cie_id = frame_table.add_cie(cie.clone());
+
+            let personality_cie_id = if unwinding {
                 let code_ptr_encoding = if pic_eh_frame {
                     if module.isa().triple().architecture == target_lexicon::Architecture::X86_64 {
                         gimli::DwEhPe(
@@ -160,14 +164,18 @@ impl UnwindContext {
 
                     cie.personality = Some((code_ptr_encoding, address_for_data(personality_ref)));
                 }
-            }
 
-            Some(frame_table.add_cie(cie))
+                Some(frame_table.add_cie(cie))
+            } else {
+                None
+            };
+
+            (Some(cie_id), personality_cie_id)
         } else {
-            None
+            (None, None)
         };
 
-        UnwindContext { endian, frame_table, cie_id, unwinding }
+        UnwindContext { endian, frame_table, cie_id, personality_cie_id }
     }
 
     pub(crate) fn add_function(
@@ -195,11 +203,8 @@ impl UnwindContext {
             UnwindInfo::SystemV(unwind_info) => {
                 let mut fde = unwind_info.to_fde(address_for_func(func_id));
 
-                // FIXME only add personality function and lsda when necessary: https://github.com/rust-lang/rust/blob/1f76d219c906f0112bb1872f33aa977164c53fa6/compiler/rustc_codegen_ssa/src/mir/mod.rs#L200-L204
-                if self.unwinding {
-                    // FIXME use unique symbol name derived from function name
-                    let lsda = module.declare_anonymous_data(false, false).unwrap();
-
+                let mut cie_id = self.cie_id.unwrap();
+                if let Some(personality_cie_id) = self.personality_cie_id {
                     let encoding = Encoding {
                         format: Format::Dwarf32,
                         version: 1,
@@ -212,10 +217,7 @@ impl UnwindContext {
                         type_info: TypeInfoTable::new(gimli::DW_EH_PE_udata4),
                     };
 
-                    let catch_type = gcc_except_table_data.type_info.add(Address::Constant(0));
-                    let catch_action = gcc_except_table_data
-                        .actions
-                        .add(Action { kind: ActionKind::Catch(catch_type), next_action: None });
+                    let mut catch_action = None;
 
                     // Like cg_llvm's terminate landing pads, those of `UnwindAction::Terminate` use an
                     // empty filter. std's personality function enters filters in the search phase
@@ -224,7 +226,7 @@ impl UnwindContext {
 
                     for call_site in context.compiled_code().unwrap().buffer.call_sites() {
                         if call_site.exception_handlers.is_empty() {
-                            gcc_except_table_data.call_sites.0.push(CallSite {
+                            gcc_except_table_data.call_sites.push(CallSite {
                                 start: u64::from(call_site.ret_addr - 1),
                                 length: 1,
                                 landing_pad: 0,
@@ -237,7 +239,17 @@ impl UnwindContext {
                                     let landing_pad = u64::from(landingpad.as_offset());
                                     let action_entry = match tag.as_u32() {
                                         EXCEPTION_HANDLER_CLEANUP => None,
-                                        EXCEPTION_HANDLER_CATCH => Some(catch_action),
+                                        EXCEPTION_HANDLER_CATCH => {
+                                            Some(*catch_action.get_or_insert_with(|| {
+                                                let catch_type = gcc_except_table_data
+                                                    .type_info
+                                                    .add(Address::Constant(0));
+                                                gcc_except_table_data.actions.add(Action {
+                                                    kind: ActionKind::Catch(catch_type),
+                                                    next_action: None,
+                                                })
+                                            }))
+                                        }
                                         EXCEPTION_HANDLER_TERMINATE => {
                                             Some(*terminate_action.get_or_insert_with(|| {
                                                 gcc_except_table_data.actions.add(Action {
@@ -248,7 +260,7 @@ impl UnwindContext {
                                         }
                                         _ => unreachable!(),
                                     };
-                                    gcc_except_table_data.call_sites.0.push(CallSite {
+                                    gcc_except_table_data.call_sites.push(CallSite {
                                         start: u64::from(call_site.ret_addr - 1),
                                         length: 1,
                                         landing_pad,
@@ -259,6 +271,16 @@ impl UnwindContext {
                             }
                         }
                     }
+
+                    // Without landing pads std's personality function would only continue
+                    // unwinding, which it also does for an FDE without LSDA.
+                    if !gcc_except_table_data.call_sites.has_landing_pads() {
+                        self.frame_table.add_fde(cie_id, fde);
+                        return;
+                    }
+
+                    // FIXME use unique symbol name derived from function name
+                    let lsda = module.declare_anonymous_data(false, false).unwrap();
 
                     let mut gcc_except_table = super::emit::WriterRelocate::new(self.endian);
 
@@ -294,10 +316,11 @@ impl UnwindContext {
                     }
 
                     module.define_data(lsda, &data).unwrap();
+                    cie_id = personality_cie_id;
                     fde.lsda = Some(address_for_data(lsda));
                 }
 
-                self.frame_table.add_fde(self.cie_id.unwrap(), fde);
+                self.frame_table.add_fde(cie_id, fde);
             }
             UnwindInfo::WindowsX64(_) | UnwindInfo::WindowsArm64(_) => {
                 // Windows does not have debug info for its unwind info.

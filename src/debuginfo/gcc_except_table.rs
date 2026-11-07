@@ -97,6 +97,25 @@ impl GccExceptTable {
 pub(super) struct CallSiteTable(pub Vec<CallSite>);
 
 impl CallSiteTable {
+    /// Appends a call site, extending the previous one if both have the same landing pad and
+    /// action. Call sites are added in address order, so no call with another handler lies
+    /// between them and the code in between never unwinds.
+    pub(super) fn push(&mut self, call_site: CallSite) {
+        if let Some(last) = self.0.last_mut()
+            && last.landing_pad == call_site.landing_pad
+            && last.action_entry == call_site.action_entry
+        {
+            debug_assert!(call_site.start >= last.start);
+            last.length = call_site.start + call_site.length - last.start;
+        } else {
+            self.0.push(call_site);
+        }
+    }
+
+    pub(super) fn has_landing_pads(&self) -> bool {
+        self.0.iter().any(|call_site| call_site.landing_pad != 0)
+    }
+
     fn encoded_size(&self) -> u64 {
         let mut len = LenWriter(0);
         self.write(&mut len).unwrap();
@@ -182,7 +201,7 @@ impl ActionTable {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub(super) struct ActionOffset(u64);
 
 pub(super) struct Action {

@@ -219,6 +219,48 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             assert!(stderr.contains(message), "{arg}: expected `{message}`, got:\n{stderr}");
         }
     }),
+    TestCase::custom("aot.unwind-lsda", &|runner| {
+        if !runner.panic_unwind_support || !runner.is_native {
+            eprintln!("[SKIP] unwind-lsda (unsupported target, panic=abort or cross compiling)");
+            return;
+        }
+        let objdump = get_default_sysroot(&runner.bootstrap_host_compiler.rustc)
+            .join("lib/rustlib")
+            .join(&runner.bootstrap_host_compiler.target)
+            .join("bin/llvm-objdump");
+        if !objdump.exists() {
+            eprintln!("llvm-objdump is not installed (rustup component llvm-tools)");
+            return;
+        }
+
+        let out_dir = BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs);
+        let emit_object = |mut cmd: Command, name: &str| {
+            let object = out_dir.join(format!("unwind_lsda_{name}.o"));
+            cmd.args(["--crate-type", "lib", "--crate-name", "unwind_lsda"])
+                .args(["--edition=2024", "-Cpanic=unwind", "-Cmetadata=lsda"])
+                .args(["--emit", "obj", "-o"])
+                .arg(&object)
+                .arg("example/unwind-lsda.rs");
+            spawn_and_wait(cmd);
+            exception_tables(&objdump, &object)
+        };
+
+        let mut clif_cmd = Command::new(&runner.target_compiler.rustc);
+        clif_cmd.args(&runner.target_compiler.rustflags);
+        let clif = emit_object(clif_cmd, "clif");
+        let llvm = emit_object(Command::new(&runner.bootstrap_host_compiler.rustc), "llvm");
+
+        // Only `shared_cleanup` has landing pads, so only it has an LSDA and an FDE with a
+        // personality function. Its calls with the same cleanup share one call site entry, so
+        // there are no more entries with a landing pad than in LLVM's.
+        assert_eq!(clif.fdes_with_personality, llvm.fdes_with_personality);
+        assert_eq!(llvm.fdes_with_personality, 1);
+        assert_eq!(clif.landing_pad_call_sites.len(), 1);
+        assert!(
+            clif.landing_pad_call_sites <= llvm.landing_pad_call_sites,
+            "more call sites with landing pads than LLVM: {clif:?} vs {llvm:?}"
+        );
+    }),
     TestCase::build_bin_and_run("aot.issue-72793", "example/issue-72793.rs", &[]),
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
@@ -810,4 +852,103 @@ fn cie_pointer_encodings(objdump: &Path, object: &Path) -> BTreeMap<char, BTreeS
         }
     }
     encodings
+}
+
+#[derive(Debug)]
+struct ExceptionTables {
+    /// The number of FDEs whose CIE has a personality function.
+    fdes_with_personality: usize,
+    /// For every LSDA, the number of call site entries with a landing pad, sorted.
+    landing_pad_call_sites: Vec<usize>,
+}
+
+/// Returns a summary of the FDEs and LSDAs in `object`.
+fn exception_tables(objdump: &Path, object: &Path) -> ExceptionTables {
+    let objdump_output = |arg: &str| {
+        let output = Command::new(objdump).arg(arg).arg(object).output().unwrap();
+        assert!(output.status.success(), "llvm-objdump failed on {}", object.display());
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    // `llvm-objdump --dwarf=frames` prints `<offset> <length> <id> CIE`, followed by its
+    // augmentation, and `<offset> <length> <id> FDE cie=<offset> ...` for every FDE.
+    let frames = objdump_output("--dwarf=frames");
+    let mut cies_with_personality = BTreeSet::new();
+    let mut fde_cies = vec![];
+    let mut cie_offset = "";
+    for line in frames.lines().map(str::trim) {
+        if line.ends_with(" CIE") {
+            cie_offset = line.split_whitespace().next().unwrap();
+        } else if let Some(augmentation) = line.strip_prefix("Augmentation:") {
+            if augmentation.contains('P') {
+                cies_with_personality.insert(cie_offset);
+            }
+        } else if let Some((_, fde)) = line.split_once(" FDE cie=") {
+            fde_cies.push(fde.split_whitespace().next().unwrap());
+        }
+    }
+    let fdes_with_personality =
+        fde_cies.iter().filter(|cie| cies_with_personality.contains(*cie)).count();
+
+    // Every LSDA is in its own section of the hex dump.
+    let contents = objdump_output("-s");
+    let mut lsdas = vec![];
+    for line in contents.lines() {
+        if line.starts_with("Contents of section") {
+            lsdas.push(line.contains(" .gcc_except_table").then(Vec::new));
+        } else if let Some(Some(lsda)) = lsdas.last_mut() {
+            // ` 0000 ff031501 10200100 ...  ascii`
+            let hex = line.get(6..41).unwrap_or_default();
+            let digits = hex.bytes().filter(u8::is_ascii_hexdigit).collect::<Vec<_>>();
+            lsda.extend(digits.chunks(2).map(|byte| {
+                u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap()
+            }));
+        }
+    }
+
+    let mut landing_pad_call_sites = lsdas
+        .into_iter()
+        .flatten()
+        .map(|lsda| lsda_landing_pad_call_sites(&lsda))
+        .collect::<Vec<_>>();
+    landing_pad_call_sites.sort();
+    ExceptionTables { fdes_with_personality, landing_pad_call_sites }
+}
+
+/// Returns the number of call site entries with a landing pad in an LSDA.
+fn lsda_landing_pad_call_sites(mut lsda: &[u8]) -> usize {
+    fn uleb128(bytes: &mut &[u8]) -> u64 {
+        let mut value = 0;
+        for shift in (0..).step_by(7) {
+            let (&byte, rest) = bytes.split_first().unwrap();
+            *bytes = rest;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                break;
+            }
+        }
+        value
+    }
+
+    let [lp_start_encoding, ttype_encoding, ..] = *lsda else { panic!("LSDA is too short") };
+    assert_eq!(lp_start_encoding, 0xff, "unexpected landing pad base");
+    lsda = &lsda[2..];
+    if ttype_encoding != 0xff {
+        uleb128(&mut lsda);
+    }
+    let call_site_encoding = lsda[0];
+    assert_eq!(call_site_encoding, 0x01, "unexpected call site encoding");
+    lsda = &lsda[1..];
+    let call_sites_len = usize::try_from(uleb128(&mut lsda)).unwrap();
+    let mut call_sites = &lsda[..call_sites_len];
+
+    let mut landing_pad_call_sites = 0;
+    while !call_sites.is_empty() {
+        let _start = uleb128(&mut call_sites);
+        let _length = uleb128(&mut call_sites);
+        let landing_pad = uleb128(&mut call_sites);
+        let _action = uleb128(&mut call_sites);
+        landing_pad_call_sites += usize::from(landing_pad != 0);
+    }
+    landing_pad_call_sites
 }
