@@ -1342,6 +1342,15 @@ pub(super) fn codegen_x86_llvm_intrinsic_call<'tcx>(
             ret.write_cvalue_transmute(fx, res);
         }
 
+        "llvm.x86.xbegin" => {
+            // Hardware transactional memory may always abort, so never start a transaction. The
+            // fallback path of the caller runs instead. The status is the abort status with no
+            // flags set. A wrapper compiled by the LLVM backend can't implement this as an abort
+            // resumes at the instruction after the xbegin in the caller.
+            let status = fx.bcx.ins().iconst(types::I32, 0);
+            ret.write_cvalue(fx, CValue::by_val(status, ret.layout()));
+        }
+
         "llvm.x86.vcvtps2ph.128" => {
             // https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_cvtps_ph
             intrinsic_args!(fx, args => (a, _imm8); intrinsic);
