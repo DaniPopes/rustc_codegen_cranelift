@@ -1,0 +1,4 @@
+@align 64
+struct "Align64U8" {
+    _ "u8"
+}

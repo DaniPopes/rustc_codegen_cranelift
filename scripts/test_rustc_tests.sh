@@ -69,9 +69,9 @@ rm -r tests/run-make/target-specs # i686 not supported by Cranelift
 rm -r tests/run-make/mismatching-target-triples # same
 rm tests/ui/simd/simd-bitmask-notpow2.rs # non-pow-of-2 simd vector sizes
 rm tests/ui/attributes/fn-align-dyn.rs # per-function alignment not supported
-rm -r tests/ui/explicit-tail-calls # tail calls
 rm -r tests/run-make/pointer-auth-link-with-c # pointer auth
 rm -r tests/ui/eii # EII not yet implemented
+rm tests/ui/extern/extern-vectorcall.rs # vectorcall has no matching Cranelift calling convention
 rm -r tests/run-make/forced-unwind-terminate-pof # forced unwinding doesn't take precedence
 
 # requires LTO
@@ -115,8 +115,6 @@ rm -r tests/run-make/emit-stack-sizes # requires support for -Z emit-stack-sizes
 rm -r tests/run-make/optimization-remarks-dir # remarks are LLVM specific
 rm tests/ui/codegen/remark-flag-functionality.rs # same
 rm -r tests/run-make/print-to-output # requires --print relocation-models
-rm tests/ui/abi/rust-preserve-none-cc.rs # extern "rust-preserve-none" is LLVM specific
-rm tests/ui/abi/rust-tail-cc.rs # extern "rust-tail" is LLVM specific
 rm tests/ui/target-feature/missing-plusminus-llvm.rs # error implemented in cg_llvm
 
 # requires asm, llvm-ir and/or llvm-bc emit support

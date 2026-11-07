@@ -1,0 +1,7 @@
+# Cases of example/abi-conformance.rs that are known to mismatch, one per line:
+#
+#     <target prefix> <callee backend>_<caller backend> <case>
+#
+# `mixed` stands for both llvm_clif and clif_llvm.
+#
+# The test fails when a listed case passes, so that the entry gets removed once the bug is fixed.

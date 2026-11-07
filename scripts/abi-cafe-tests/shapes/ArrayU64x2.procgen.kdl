@@ -1,0 +1,3 @@
+struct "ArrayU64x2" {
+    _ "[u64; 2]"
+}

@@ -1,6 +1,7 @@
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::build_sysroot::{SysrootConfig, SysrootKind};
@@ -66,6 +67,36 @@ const NO_SYSROOT_SUITE: &[TestCase] = &[
         "example/mini_core_hello_world.rs",
         &["abc", "bcd"],
     ),
+    // Mach-O only supports 255 sections, so data objects that share a custom section have to be
+    // emitted into one section.
+    TestCase::custom("aot.macho_many_custom_sections", &|runner| {
+        let mut source = String::from(
+            "#![feature(no_core, lang_items)]\n\
+             #![allow(internal_features)]\n\
+             #![no_core]\n\
+             #[lang = \"pointee_sized\"] trait PointeeSized {}\n\
+             #[lang = \"meta_sized\"] trait MetaSized: PointeeSized {}\n\
+             #[lang = \"sized\"] trait Sized: MetaSized {}\n\
+             #[lang = \"sync\"] unsafe trait Sync {}\n\
+             #[lang = \"drop_glue\"] unsafe fn drop_glue<T: ?Sized>(_: &mut T) {}\n\
+             unsafe impl Sync for u8 {}\n",
+        );
+        for i in 0..300 {
+            source.push_str(&format!(
+                "#[used] #[unsafe(link_section = \"__DATA,__mod_init_func,mod_init_funcs\")] \
+                 static S{i}: u8 = 0;\n"
+            ));
+        }
+        let out_dir = BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs);
+        let source_path = out_dir.join("macho_many_custom_sections.rs");
+        fs::write(&source_path, source).unwrap();
+
+        let cmd = runner.rustc_command_for_target(
+            "aarch64-apple-darwin",
+            [source_path.as_os_str(), OsStr::new("--crate-type=lib"), OsStr::new("--emit=obj")],
+        );
+        spawn_and_wait(cmd);
+    }),
 ];
 
 const BASE_SYSROOT_SUITE: &[TestCase] = &[
@@ -87,6 +118,7 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         "example/track-caller-attribute.rs",
         &[],
     ),
+    TestCase::build_bin_and_run("aot.tail-calls", "example/tail-calls.rs", &[]),
     TestCase::build_bin_and_run("aot.float-minmax-pass", "example/float-minmax-pass.rs", &[]),
     TestCase::custom("aot.powi_libcall_signature", &|runner| {
         let mut cmd = runner.rustc_command(["example/powi-libcall-signature.rs"]);
@@ -145,7 +177,121 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             );
         }
     }),
+    TestCase::custom("aot.abi_conformance", &|runner| {
+        let target = &runner.target_compiler.target;
+        // The cases assume a 64-bit x86_64 or aarch64 ABI that is not the Windows one.
+        if !(target.starts_with("x86_64") || target.starts_with("aarch64"))
+            || target.contains("windows")
+        {
+            eprintln!("Skipping `abi_conformance` test: unsupported target");
+            return;
+        }
+
+        let out_dir = BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join("abi-conformance");
+        let source = "example/abi-conformance.rs";
+
+        // Calls in both directions between the backends, and between each backend and itself to
+        // check the test case.
+        let mut failed = false;
+        for (callee, caller) in
+            [("llvm", "llvm"), ("clif", "clif"), ("llvm", "clif"), ("clif", "llvm")]
+        {
+            eprintln!("abi-conformance: {callee} callee, {caller} caller");
+            let out_dir = out_dir.join(format!("{callee}_{caller}"));
+            ensure_empty_dir(&out_dir);
+
+            let rustc = |backend: &str, args: &[&str]| {
+                let mut cmd =
+                    runner.rustc_command_in(&out_dir, &runner.target_compiler.target, [source]);
+                cmd.arg("--check-cfg=cfg(callee, caller, variadic)");
+                if backend == "llvm" {
+                    cmd.arg("-Zcodegen-backend=llvm");
+                }
+                // Cranelift can't define variadic functions.
+                if callee == "llvm" {
+                    cmd.args(["--cfg", "variadic"]);
+                }
+                cmd.args(args);
+                spawn_and_wait(cmd);
+            };
+
+            rustc(
+                callee,
+                &["--cfg", "callee", "--crate-type", "rlib", "--crate-name", "abi_callee"],
+            );
+            rustc(caller, &["--cfg", "caller", "--crate-name", "abi_caller"]);
+
+            let mut cmd = runner.target_compiler.run_with_runner(out_dir.join("abi_caller"));
+            let output = cmd.output().unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprint!("{stderr}");
+
+            // Every mismatch is reported as `<case>: <details>`, followed by their count.
+            let mismatches: BTreeSet<_> = stderr
+                .lines()
+                .filter_map(|line| line.split_once(": "))
+                .map(|(case, _)| case.to_owned())
+                .collect();
+            let busted = busted_abi_conformance_cases(&runner.dirs, target, callee, caller);
+            let unexpected: Vec<_> = mismatches.difference(&busted).collect();
+            let fixed: Vec<_> = busted.difference(&mismatches).collect();
+            // A crash is not a mismatch, and would hide the cases that did not run.
+            let completed = output.status.success() || stderr.contains(" ABI mismatches");
+            if !unexpected.is_empty() || !fixed.is_empty() || !completed {
+                eprintln!(
+                    "abi-conformance: unexpected mismatches: {unexpected:?}, cases in \
+                     scripts/abi-conformance-busted.txt that now pass: {fixed:?}, completed: \
+                     {completed}"
+                );
+                failed = true;
+            }
+        }
+        if failed {
+            std::process::exit(1);
+        }
+    }),
     TestCase::build_bin_and_run("aot.issue-72793", "example/issue-72793.rs", &[]),
+    // Call every function of a crate built with one backend from a crate built with the other one.
+    TestCase::custom("aot.mixed_backend_abi", &|runner| {
+        let (arch, _) = runner.target_compiler.target.split_once('-').unwrap();
+        if !matches!(arch, "x86_64" | "aarch64") {
+            eprintln!("Skipping `mixed_backend_abi` test: unsupported target");
+            return;
+        }
+
+        let llvm = "-Zcodegen-backend=llvm";
+        for (name, callee_flag, caller_flag) in
+            [("llvm", Some(llvm), None), ("clif", None, Some(llvm))]
+        {
+            let callee = format!("callee_{name}");
+            // LLVM runs out of registers at -Copt-level=0 for `preserve_none` tail calls with many
+            // arguments on the stack.
+            let mut args = vec![
+                "example/mixed-backend-abi-callee.rs",
+                "--crate-type=rlib",
+                "-Copt-level=1",
+                "--crate-name",
+            ];
+            args.push(&callee);
+            args.extend(callee_flag);
+            runner.run_rustc(args);
+
+            let caller = format!("mixed_backend_abi_{name}");
+            let callee_rlib =
+                BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs).join(format!("lib{callee}.rlib"));
+            let callee_extern = format!("callee={}", callee_rlib.display());
+            let mut args = vec!["example/mixed-backend-abi.rs", "--crate-name"];
+            args.push(&caller);
+            args.extend(["--extern", &callee_extern, "--check-cfg=cfg(llvm_caller)"]);
+            // Without Cranelift the default backend is LLVM too.
+            if caller_flag.is_some() || runner.default_backend_is_llvm {
+                args.extend(["--cfg", "llvm_caller"]);
+            }
+            args.extend(caller_flag);
+            runner.run_rustc(args);
+            runner.run_out_command(&caller, &[]);
+        }
+    }),
     TestCase::build_bin("aot.issue-59326", "example/issue-59326.rs"),
     TestCase::build_bin_and_run("aot.gen_block_iterate", "example/gen_block_iterate.rs", &[]),
     TestCase::build_bin_and_run("aot.raw-dylib", "example/raw-dylib.rs", &[]),
@@ -478,6 +624,7 @@ pub(crate) fn run_tests(
             skip_tests,
             bootstrap_host_compiler.target == target_tuple,
             stdlib_source.clone(),
+            matches!(cg_clif_dylib, CodegenBackend::Builtin(name) if name == "llvm"),
         );
 
         let path = BUILD_EXAMPLE_OUT_DIR.to_path(dirs);
@@ -511,6 +658,7 @@ pub(crate) fn run_tests(
             skip_tests,
             bootstrap_host_compiler.target == target_tuple,
             stdlib_source,
+            matches!(cg_clif_dylib, CodegenBackend::Builtin(name) if name == "llvm"),
         );
 
         if run_base_sysroot {
@@ -530,6 +678,33 @@ pub(crate) fn run_tests(
     }
 }
 
+/// The cases of `example/abi-conformance.rs` that are known to mismatch for a target and a
+/// callee and caller backend pair. `mixed` in the file stands for both directions between backends.
+fn busted_abi_conformance_cases(
+    dirs: &Dirs,
+    target: &str,
+    callee: &str,
+    caller: &str,
+) -> BTreeSet<String> {
+    let busted = fs::read_to_string(dirs.source_dir.join("scripts/abi-conformance-busted.txt"));
+    busted
+        .unwrap()
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.is_empty())
+        .filter_map(|line| {
+            let &[target_prefix, backends, case] = &*line.split_whitespace().collect::<Vec<_>>()
+            else {
+                panic!("malformed line in abi-conformance-busted.txt: {line}");
+            };
+            let applies = match backends {
+                "mixed" => callee != caller,
+                backends => backends == format!("{callee}_{caller}"),
+            };
+            (applies && target.starts_with(target_prefix)).then(|| case.to_owned())
+        })
+        .collect()
+}
+
 struct TestRunner<'a> {
     is_native: bool,
     jit_supported: bool,
@@ -538,6 +713,7 @@ struct TestRunner<'a> {
     dirs: Dirs,
     target_compiler: Compiler,
     stdlib_source: PathBuf,
+    default_backend_is_llvm: bool,
 }
 
 impl<'a> TestRunner<'a> {
@@ -549,6 +725,7 @@ impl<'a> TestRunner<'a> {
         skip_tests: &'a [&'a str],
         is_native: bool,
         stdlib_source: PathBuf,
+        default_backend_is_llvm: bool,
     ) -> Self {
         target_compiler.rustflags.extend(rustflags_from_env("RUSTFLAGS"));
         target_compiler.rustdocflags.extend(rustflags_from_env("RUSTDOCFLAGS"));
@@ -564,6 +741,7 @@ impl<'a> TestRunner<'a> {
             dirs,
             target_compiler,
             stdlib_source,
+            default_backend_is_llvm,
         }
     }
 
@@ -624,15 +802,33 @@ impl<'a> TestRunner<'a> {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        self.rustc_command_for_target(&self.target_compiler.target, args)
+    }
+
+    #[must_use]
+    fn rustc_command_for_target<I, S>(&self, target: &str, args: I) -> Command
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.rustc_command_in(&BUILD_EXAMPLE_OUT_DIR.to_path(&self.dirs), target, args)
+    }
+
+    #[must_use]
+    fn rustc_command_in<I, S>(&self, out_dir: &Path, target: &str, args: I) -> Command
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         let mut cmd = Command::new(&self.target_compiler.rustc);
         cmd.args(&self.target_compiler.rustflags);
         cmd.arg("-L");
-        cmd.arg(format!("crate={}", BUILD_EXAMPLE_OUT_DIR.to_path(&self.dirs).display()));
+        cmd.arg(format!("crate={}", out_dir.display()));
         cmd.arg("--out-dir");
-        cmd.arg(BUILD_EXAMPLE_OUT_DIR.to_path(&self.dirs));
+        cmd.arg(out_dir);
         cmd.arg("-Cdebuginfo=2");
         cmd.arg("--target");
-        cmd.arg(&self.target_compiler.target);
+        cmd.arg(target);
         if !self.panic_unwind_support {
             cmd.arg("-Cpanic=abort");
         }

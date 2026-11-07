@@ -1,0 +1,5 @@
+tagged "FloatPayload" {
+  A { _ "f32"; }
+  B { _ "f32"; _ "f32"; }
+  C
+}

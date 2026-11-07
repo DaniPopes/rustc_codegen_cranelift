@@ -1,0 +1,3 @@
+struct "ZstArray" {
+    _ "[u32; 0]"
+}
