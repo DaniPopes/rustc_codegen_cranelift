@@ -894,6 +894,13 @@ fn codegen_stmt<'tcx>(fx: &mut FunctionCx<'_, '_, 'tcx>, cur_block: Block, stmt:
                     };
                     lval.write_cvalue(fx, ptr_val);
                 }
+                Rvalue::Aggregate(_, ref operands)
+                    if lval.layout().ty.is_simd() && lval.try_to_ptr().is_none() =>
+                {
+                    // A SIMD type in a register can't be projected into. The vector is the array.
+                    let array = codegen_operand(fx, &operands[FieldIdx::ZERO]);
+                    lval.write_cvalue_transmute(fx, array);
+                }
                 Rvalue::Aggregate(ref kind, ref operands) => {
                     let (variant_index, variant_dest, active_field_index) = match **kind {
                         mir::AggregateKind::Adt(_, variant_index, _, _, active_field_index) => {

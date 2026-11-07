@@ -417,6 +417,8 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
         // FIXME generalize vector types
         "llvm.aarch64.neon.tbl1.v8i8" => {
             intrinsic_args!(fx, args => (t, idx); intrinsic);
+            // `value_lane_dyn` needs `t` in memory. Do this once rather than for every lane.
+            let t = t.spill_vector(fx);
 
             let zero = fx.bcx.ins().iconst(types::I8, 0);
             for i in 0..8 {
@@ -426,11 +428,14 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
                 let t_idx = fx.bcx.ins().uextend(fx.pointer_type, idx_lane);
                 let t_lane = t.value_lane_dyn(fx, t_idx).load_scalar(fx);
                 let res = fx.bcx.ins().select(is_zero, zero, t_lane);
-                ret.place_lane(fx, i).to_ptr().store(fx, res, MemFlagsData::trusted());
+                let ret_lane = ret.place_lane(fx, i);
+                ret_lane.write_cvalue(fx, CValue::by_val(res, ret_lane.layout()));
             }
         }
         "llvm.aarch64.neon.tbl1.v16i8" => {
             intrinsic_args!(fx, args => (t, idx); intrinsic);
+            // `value_lane_dyn` needs `t` in memory. Do this once rather than for every lane.
+            let t = t.spill_vector(fx);
 
             let zero = fx.bcx.ins().iconst(types::I8, 0);
             for i in 0..16 {
@@ -440,7 +445,8 @@ pub(super) fn codegen_aarch64_llvm_intrinsic_call<'tcx>(
                 let t_idx = fx.bcx.ins().uextend(fx.pointer_type, idx_lane);
                 let t_lane = t.value_lane_dyn(fx, t_idx).load_scalar(fx);
                 let res = fx.bcx.ins().select(is_zero, zero, t_lane);
-                ret.place_lane(fx, i).to_ptr().store(fx, res, MemFlagsData::trusted());
+                let ret_lane = ret.place_lane(fx, i);
+                ret_lane.write_cvalue(fx, CValue::by_val(res, ret_lane.layout()));
             }
         }
 
