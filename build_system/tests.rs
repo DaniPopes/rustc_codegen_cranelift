@@ -903,9 +903,11 @@ fn exception_tables(objdump: &Path, object: &Path) -> ExceptionTables {
             // ` 0000 ff031501 10200100 ...  ascii`
             let hex = line.get(6..41).unwrap_or_default();
             let digits = hex.bytes().filter(u8::is_ascii_hexdigit).collect::<Vec<_>>();
-            lsda.extend(digits.chunks(2).map(|byte| {
-                u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap()
-            }));
+            lsda.extend(
+                digits.chunks(2).map(|byte| {
+                    u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap()
+                }),
+            );
         }
     }
 
