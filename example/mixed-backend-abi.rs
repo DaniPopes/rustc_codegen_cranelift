@@ -13,6 +13,28 @@ macro_rules! check {
     };
 }
 
+macro_rules! check_many_args {
+    ($module:ident) => {{
+        use callee::$module::many_args;
+
+        let ints = black_box([1u64; 26]);
+        let [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, a23, a24, a25] =
+            ints.map(|x| x + 1);
+        let [f0, f1, f2, f3, f4, f5, f6, f7, f8, f9] = black_box([0.5f64; 10]);
+        let expected = mix(&[
+            a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18,
+            a19, a20, a21, a22, a23, a24, a25,
+        ]) as f64
+            + f0 + f1 * 2.0 + f2 * 3.0 + f3 * 4.0 + f4 * 5.0 + f5 * 6.0 + f6 * 7.0 + f7 * 8.0
+            + f8 * 9.0 + f9 * 10.0;
+        let result = many_args(
+            a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18,
+            a19, a20, a21, a22, a23, a24, a25, f0, f1, f2, f3, f4, f5, f6, f7, f8, f9,
+        );
+        assert_eq!(result, expected, "{}::many_args", stringify!($module));
+    }};
+}
+
 macro_rules! check_abi {
     ($module:ident) => {{
         use callee::$module::*;
@@ -94,61 +116,7 @@ macro_rules! check_abi {
             mix(&[a, b, c, d, e, f, g, fold(y), 13])
         );
 
-        {
-            let ints = black_box([1u64; 26]);
-            let [
-                a0,
-                a1,
-                a2,
-                a3,
-                a4,
-                a5,
-                a6,
-                a7,
-                a8,
-                a9,
-                a10,
-                a11,
-                a12,
-                a13,
-                a14,
-                a15,
-                a16,
-                a17,
-                a18,
-                a19,
-                a20,
-                a21,
-                a22,
-                a23,
-                a24,
-                a25,
-            ] = ints.map(|x| x + 1);
-            let fs = black_box([0.5f64; 10]);
-            let [f0, f1, f2, f3, f4, f5, f6, f7, f8, f9] = fs;
-            let expected = mix(&[
-                a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17,
-                a18, a19, a20, a21, a22, a23, a24, a25,
-            ]) as f64
-                + f0
-                + f1 * 2.0
-                + f2 * 3.0
-                + f3 * 4.0
-                + f4 * 5.0
-                + f5 * 6.0
-                + f6 * 7.0
-                + f7 * 8.0
-                + f8 * 9.0
-                + f9 * 10.0;
-            check!(
-                $module,
-                many_args(
-                    a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17,
-                    a18, a19, a20, a21, a22, a23, a24, a25, f0, f1, f2, f3, f4, f5, f6, f7, f8, f9
-                ),
-                expected
-            );
-        }
+        check_many_args!($module);
 
         check!($module, ret_i128(a), ((a as u128) << 64) | (a as u128 * 3));
         let Wide(r, s) = ret_wide(a);
@@ -162,60 +130,22 @@ fn check_preserve_none() {
     use callee::mix;
     use callee::preserve_none::*;
 
-    let ints = black_box([1u64; 26]);
-    let [
-        a0,
-        a1,
-        a2,
-        a3,
-        a4,
-        a5,
-        a6,
-        a7,
-        a8,
-        a9,
-        a10,
-        a11,
-        a12,
-        a13,
-        a14,
-        a15,
-        a16,
-        a17,
-        a18,
-        a19,
-        a20,
-        a21,
-        a22,
-        a23,
-        a24,
-        a25,
-    ] = ints.map(|x| x + 1);
-    let [f0, f1, f2, f3, f4, f5, f6, f7, f8, f9] = black_box([0.5f64; 10]);
-    let expected = mix(&[
-        a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19,
-        a20, a21, a22, a23, a24, a25,
-    ]) as f64
-        + f0
-        + f1 * 2.0
-        + f2 * 3.0
-        + f3 * 4.0
-        + f4 * 5.0
-        + f5 * 6.0
-        + f6 * 7.0
-        + f7 * 8.0
-        + f8 * 9.0
-        + f9 * 10.0;
+    check_many_args!(preserve_none);
+
+    // Small integers use other registers than the large ones.
+    let (a, b) = black_box((5u64, 9u64));
+    let (s, t, u, v) = black_box((250u8, 65000u16, 3_000_000_000u32, true));
     assert_eq!(
-        many_args(
-            a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18,
-            a19, a20, a21, a22, a23, a24, a25, f0, f1, f2, f3, f4, f5, f6, f7, f8, f9
-        ),
-        expected,
-        "preserve_none::many_args"
+        small(s, t, a, u, v),
+        mix(&[s as u64, t as u64, a, u as u64, v as u64]),
+        "preserve_none::small"
+    );
+    assert_eq!(
+        small_late(a, b, a, b, a, b, a, s, a + b),
+        mix(&[a, b, a, b, a, b, a, s as u64, a + b]),
+        "preserve_none::small_late"
     );
 
-    let (a, b) = black_box((5u64, 9u64));
     let Pair(x, y) = pair(a, Pair(3, 1.5), b);
     assert_eq!((x, y), (mix(&[a, 3, b]), 1.5 + 5.0 + 9.0), "preserve_none::pair");
 
@@ -260,7 +190,7 @@ extern "rust-preserve-none" fn ping(
     become next(
         n - 1,
         acc,
-        ping as usize,
+        ping as *const () as usize,
         a,
         b + 1,
         c,
@@ -289,7 +219,7 @@ fn check_tail_calls() {
     let result = callee::chain(
         N,
         0,
-        ping as usize,
+        ping as *const () as usize,
         start,
         2,
         3,

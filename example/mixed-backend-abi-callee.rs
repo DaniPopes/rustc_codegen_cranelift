@@ -183,6 +183,18 @@ pub mod preserve_none {
 
     define_many_args!("rust-preserve-none");
 
+    #[inline(never)]
+    pub extern "rust-preserve-none" fn small(a: u8, b: u16, c: u64, d: u32, e: bool) -> u64 {
+        mix(&[a as u64, b as u64, c, d as u64, e as u64])
+    }
+
+    #[inline(never)]
+    pub extern "rust-preserve-none" fn small_late(
+        a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64, h: u8, i: u64,
+    ) -> u64 {
+        mix(&[a, b, c, d, e, f, g, h as u64, i])
+    }
+
     #[derive(Clone, Copy)]
     pub struct Pair(pub u64, pub f64);
 
@@ -263,7 +275,7 @@ pub extern "rust-preserve-none" fn chain(
     become next(
         n - 1,
         acc,
-        chain as usize,
+        chain as *const () as usize,
         a + 1,
         b,
         c,
