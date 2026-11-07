@@ -34,6 +34,8 @@ pub(crate) fn analyze(fx: &FunctionCx<'_, '_, '_>) -> IndexVec<Local, SsaKind> {
         for stmt in bb.statements.iter() {
             if let Assign(place_and_rval) = &stmt.kind
                 && let Rvalue::Ref(_, _, place) | Rvalue::RawPtr(_, place) = &place_and_rval.1
+                // The borrowed memory is not that of the local if it is behind a pointer.
+                && !place.is_indirect()
             {
                 flag_map[place.local] = SsaKind::NotSsa;
             }
