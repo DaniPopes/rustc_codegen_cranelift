@@ -5,6 +5,7 @@ use cranelift_codegen::ir::immediates::Offset32;
 use cranelift_frontend::Variable;
 use rustc_middle::ty::FnSig;
 use rustc_middle::ty::layout::HasTypingEnv;
+use smallvec::SmallVec;
 
 use crate::prelude::*;
 
@@ -329,6 +330,30 @@ impl<'tcx> CValue<'tcx> {
                 CValue::by_ref(field_ptr, lane_layout)
             }
             CValueInner::ByRef(_, Some(_)) => unreachable!(),
+        }
+    }
+
+    /// Load the `chunk_idx`th 128-bit chunk of a value as the clif vector type `chunk_ty`.
+    pub(crate) fn load_simd_chunk(
+        self,
+        fx: &mut FunctionCx<'_, '_, 'tcx>,
+        chunk_ty: Type,
+        chunk_idx: u32,
+    ) -> Value {
+        match self.0 {
+            CValueInner::ByVal(value) => {
+                assert_eq!(chunk_idx, 0);
+                if fx.bcx.func.dfg.value_type(value) == chunk_ty {
+                    value
+                } else {
+                    codegen_bitcast(fx, chunk_ty, value)
+                }
+            }
+            CValueInner::ByRef(ptr, None) => {
+                let flags = MemFlagsData::new().with_notrap();
+                ptr.offset_i64(fx, i64::from(chunk_idx) * 16).load(fx, chunk_ty, flags)
+            }
+            CValueInner::ByValPair(_, _) | CValueInner::ByRef(_, Some(_)) => unreachable!(),
         }
     }
 
@@ -706,10 +731,27 @@ impl<'tcx> CPlace<'tcx> {
                             _ => {}
                         }
 
-                        let from_addr = from_ptr.get_addr(fx);
-                        let to_addr = to_ptr.get_addr(fx);
                         let src_layout = from.1;
                         let size = dst_layout.size.bytes();
+
+                        // Copy SIMD vectors as 128-bit chunks rather than 64-bit integers, such
+                        // that a later vector load can be forwarded from the stores.
+                        if fx.has_clif_simd()
+                            && (src_layout.ty.is_simd() || dst_layout.ty.is_simd())
+                            && size % 16 == 0
+                            && size <= 64
+                        {
+                            let chunks = (0..size / 16)
+                                .map(|i| from.load_simd_chunk(fx, types::I8X16, i as u32))
+                                .collect::<SmallVec<[_; 4]>>();
+                            for (i, chunk) in chunks.into_iter().enumerate() {
+                                self.store_simd_chunk(fx, i as u32, chunk);
+                            }
+                            return;
+                        }
+
+                        let from_addr = from_ptr.get_addr(fx);
+                        let to_addr = to_ptr.get_addr(fx);
                         // `emit_small_memory_copy` uses `u8` for alignments, just use the maximum
                         // alignment that fits in a `u8` if the actual alignment is larger.
                         let src_align = src_layout.align.bytes().try_into().unwrap_or(128);
@@ -843,6 +885,17 @@ impl<'tcx> CPlace<'tcx> {
             }
             CPlaceInner::Addr(_, Some(_)) => unreachable!(),
         }
+    }
+
+    /// Store a 128-bit vector as the `chunk_idx`th chunk of this place.
+    pub(crate) fn store_simd_chunk(
+        self,
+        fx: &mut FunctionCx<'_, '_, 'tcx>,
+        chunk_idx: u32,
+        chunk: Value,
+    ) {
+        let flags = MemFlagsData::new().with_notrap();
+        self.to_ptr().offset_i64(fx, i64::from(chunk_idx) * 16).store(fx, chunk, flags);
     }
 
     /// Write a value to an individual lane in a SIMD vector.
