@@ -71,6 +71,7 @@ rm tests/ui/simd/simd-bitmask-notpow2.rs # non-pow-of-2 simd vector sizes
 rm tests/ui/attributes/fn-align-dyn.rs # per-function alignment not supported
 rm -r tests/run-make/pointer-auth-link-with-c # pointer auth
 rm -r tests/ui/eii # EII not yet implemented
+rm tests/ui/extern/extern-vectorcall.rs # vectorcall has no matching Cranelift calling convention
 rm -r tests/run-make/forced-unwind-terminate-pof # forced unwinding doesn't take precedence
 
 # requires LTO
