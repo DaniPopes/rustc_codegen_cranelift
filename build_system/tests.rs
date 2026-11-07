@@ -358,8 +358,14 @@ const EXTENDED_SYSROOT_SUITE: &[TestCase] = &[
 
         STDARCH.clean(&runner.dirs);
 
-        let skip = format!("build_system/stdarch_skip/{arch}_core.txt");
-        let skip = fs::read_to_string(runner.dirs.source_dir.join(skip)).unwrap_or_default();
+        let skip = [format!("{arch}_core.txt"), format!("{target}_core.txt")]
+            .into_iter()
+            .map(|skip| {
+                let skip = runner.dirs.source_dir.join("build_system/stdarch_skip").join(skip);
+                fs::read_to_string(skip).unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let skip_functions = skip
             .lines()
