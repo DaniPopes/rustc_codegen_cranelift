@@ -28,8 +28,9 @@ mod b {
 fn main() {
     assert_eq!(a::first_table(), a::second_table());
 
-    // COFF linkers do not merge strings, and the Apple linker only does so when optimizing.
-    if !cfg!(any(windows, target_vendor = "apple")) {
+    // COFF linkers do not merge strings, the Apple linker only does so when optimizing, and s390x
+    // needs the symbols of strings aligned, which keeps them out of the merge section.
+    if !cfg!(any(windows, target_vendor = "apple", target_arch = "s390x")) {
         assert_eq!(a::c_string(), b::c_string());
     }
 }

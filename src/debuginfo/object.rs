@@ -70,19 +70,20 @@ impl WriteDebugInfo for ObjectProduct {
                 let id: u32 = id.try_into().unwrap();
                 let data_id = (id & 1 << 31 != 0).then(|| DataId::from_u32(id & !(1 << 31)));
                 // Anonymous data has no symbol on ELF.
-                if let Some(location) =
-                    data_id.and_then(|data_id| self.symbolless_data_location(data_id))
-                {
-                    location
-                } else {
-                    let symbol_id = match data_id {
-                        Some(data_id) => self.data_symbol(data_id),
-                        None => self.function_symbol(FuncId::from_u32(id)),
-                    };
-                    if use_section_symbol {
-                        self.object.symbol_section_and_offset(symbol_id).unwrap_or((symbol_id, 0))
-                    } else {
-                        (symbol_id, 0)
+                match data_id.and_then(|data_id| self.symbolless_data_location(data_id)) {
+                    Some(location) => location,
+                    None => {
+                        let symbol_id = match data_id {
+                            Some(data_id) => self.data_symbol(data_id),
+                            None => self.function_symbol(FuncId::from_u32(id)),
+                        };
+                        if use_section_symbol {
+                            self.object
+                                .symbol_section_and_offset(symbol_id)
+                                .unwrap_or((symbol_id, 0))
+                        } else {
+                            (symbol_id, 0)
+                        }
                     }
                 }
             }

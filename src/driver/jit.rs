@@ -78,7 +78,6 @@ pub(crate) fn run_jit(tcx: TyCtxt<'_>, target_cpu: String, jit_args: Vec<String>
                 }
                 MonoItem::Static(def_id) => {
                     crate::constant::codegen_static(
-                        tcx,
                         &mut ConstantCx::new(tcx),
                         &mut jit_module,
                         def_id,

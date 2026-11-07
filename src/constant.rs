@@ -49,11 +49,11 @@ impl<'tcx> ConstantCx<'tcx> {
 }
 
 pub(crate) fn codegen_static<'tcx>(
-    tcx: TyCtxt<'tcx>,
     constants_cx: &mut ConstantCx<'tcx>,
     module: &mut dyn Module,
     def_id: DefId,
 ) -> DataId {
+    let tcx = constants_cx.tcx;
     constants_cx.todo.push(TodoItem::Static(def_id));
     constants_cx.finalize(module);
 
@@ -178,7 +178,6 @@ pub(crate) fn codegen_const_value<'tcx>(
                     }
                     GlobalAlloc::VTable(ty, dyn_ty) => {
                         let data_id = data_id_for_vtable(
-                            fx.tcx,
                             fx.constants_cx,
                             fx.module,
                             ty,
@@ -273,13 +272,12 @@ pub(crate) fn data_id_for_alloc_id<'tcx>(
 }
 
 pub(crate) fn data_id_for_vtable<'tcx>(
-    tcx: TyCtxt<'tcx>,
     cx: &mut ConstantCx<'tcx>,
     module: &mut dyn Module,
     ty: Ty<'tcx>,
     trait_ref: Option<ExistentialTraitRef<'tcx>>,
 ) -> DataId {
-    let alloc_id = tcx.vtable_allocation((ty, trait_ref));
+    let alloc_id = cx.tcx.vtable_allocation((ty, trait_ref));
     data_id_for_alloc_id(cx, module, alloc_id)
 }
 
@@ -470,7 +468,6 @@ fn define_all_allocs<'tcx>(tcx: TyCtxt<'tcx>, module: &mut dyn Module, cx: &mut 
                 }
                 GlobalAlloc::Memory(_) => data_id_for_alloc_id(cx, module, alloc_id),
                 GlobalAlloc::VTable(ty, dyn_ty) => data_id_for_vtable(
-                    tcx,
                     cx,
                     module,
                     ty,
