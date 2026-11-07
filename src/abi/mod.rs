@@ -62,8 +62,12 @@ pub(crate) fn conv_to_call_conv(
     match c {
         CanonAbi::Rust | CanonAbi::RustCold | CanonAbi::C => default_call_conv,
 
-        // FIXME use a dedicated Cranelift calling convention matching LLVM's `preserve_none`.
-        CanonAbi::RustPreserveNone => CallConv::Tail,
+        // LLVM uses `preserve_none` on x86_64 and aarch64, and the C calling convention elsewhere.
+        // Elsewhere Cranelift's `tail` calling convention keeps `become` a guaranteed tail call.
+        CanonAbi::RustPreserveNone => match sess.target.arch {
+            Arch::X86_64 | Arch::AArch64 => CallConv::PreserveNone,
+            _ => CallConv::Tail,
+        },
 
         // FIXME use a calling convention matching LLVM's `tailcc` for interop with LLVM codegen.
         CanonAbi::RustTail => CallConv::Tail,
@@ -89,8 +93,8 @@ pub(crate) fn conv_to_call_conv(
     }
 }
 
-/// Whether functions with this ABI use Cranelift's `tail` calling convention, which is required
-/// by `return_call` and `return_call_indirect`.
+/// Whether functions with this ABI use a Cranelift calling convention that supports `return_call`
+/// and `return_call_indirect`: `tail` or `preserve_none`.
 fn is_tail_conv(c: CanonAbi) -> bool {
     matches!(c, CanonAbi::RustPreserveNone | CanonAbi::RustTail)
 }

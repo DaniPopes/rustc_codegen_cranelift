@@ -1,7 +1,8 @@
 //! Callee half of a cross-backend ABI test: this crate is built with one codegen backend and
 //! called from `mixed-backend-abi.rs`, which is built with the other one.
 
-#![allow(improper_ctypes_definitions)]
+#![feature(explicit_tail_calls, rust_preserve_none_cc)]
+#![allow(improper_ctypes_definitions, incomplete_features)]
 
 #[inline]
 pub fn mix(vals: &[u64]) -> u64 {
@@ -11,6 +12,28 @@ pub fn mix(vals: &[u64]) -> u64 {
 #[inline]
 pub fn fold(x: u128) -> u64 {
     x as u64 ^ ((x >> 64) as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+}
+
+macro_rules! define_many_args {
+    ($abi:literal) => {
+        // More arguments than there are registers in any convention.
+            #[inline(never)]
+            pub extern $abi fn many_args(
+                a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64, a7: u64, a8: u64,
+                a9: u64, a10: u64, a11: u64, a12: u64, a13: u64, a14: u64, a15: u64, a16: u64,
+                a17: u64, a18: u64, a19: u64, a20: u64, a21: u64, a22: u64, a23: u64, a24: u64,
+                a25: u64, f0: f64, f1: f64, f2: f64, f3: f64, f4: f64, f5: f64, f6: f64, f7: f64,
+                f8: f64, f9: f64,
+            ) -> f64 {
+                let ints = mix(&[
+                    a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17,
+                    a18, a19, a20, a21, a22, a23, a24, a25,
+                ]);
+                ints as f64 + f0 + f1 * 2.0 + f2 * 3.0 + f3 * 4.0 + f4 * 5.0 + f5 * 6.0 + f6 * 7.0
+                    + f7 * 8.0 + f8 * 9.0 + f9 * 10.0
+            }
+
+    };
 }
 
 macro_rules! define_abi {
@@ -131,6 +154,8 @@ macro_rules! define_abi {
                 mix(&[a, b, c, d, e, f, g, h, i as u64, fold(x), j as u64, fold(y)])
             }
 
+            define_many_args!($abi);
+
             #[inline(never)]
             pub extern $abi fn ret_i128(a: u64) -> u128 {
                 ((a as u128) << 64) | (a as u128).wrapping_mul(3)
@@ -151,3 +176,111 @@ macro_rules! define_abi {
 
 define_abi!(rust, "Rust",);
 define_abi!(c, "C", #[repr(C)]);
+
+// LLVM can't compile `i128` arguments in this convention on x86_64.
+pub mod preserve_none {
+    use super::mix;
+
+    define_many_args!("rust-preserve-none");
+
+    #[derive(Clone, Copy)]
+    pub struct Pair(pub u64, pub f64);
+
+    #[inline(never)]
+    pub extern "rust-preserve-none" fn pair(a: u64, p: Pair, b: u64) -> Pair {
+        Pair(mix(&[a, p.0, b]), p.1 + a as f64 + b as f64)
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct Big(pub [u64; 5]);
+
+    #[inline(never)]
+    pub extern "rust-preserve-none" fn big(a: u64, x: Big, b: u64, y: Big) -> Big {
+        let mut res = x.0;
+        for (i, r) in res.iter_mut().enumerate() {
+            *r = mix(&[a, *r, y.0[4 - i], b]);
+        }
+        Big(res)
+    }
+}
+
+/// The signature of every hop of the chain of tail calls between the two crates.
+pub type Link = extern "rust-preserve-none" fn(
+    u64,
+    u64,
+    usize,
+    u64,
+    u64,
+    u64,
+    u64,
+    u64,
+    u64,
+    u64,
+    u64,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+    f64,
+) -> u64;
+
+/// A hop of a chain that bounces between the two crates with tail calls. The ints and floats
+/// change on every hop, so every argument is checked.
+#[inline(never)]
+pub extern "rust-preserve-none" fn chain(
+    n: u64,
+    acc: u64,
+    next: usize,
+    a: u64,
+    b: u64,
+    c: u64,
+    d: u64,
+    e: u64,
+    f: u64,
+    g: u64,
+    h: u64,
+    f0: f64,
+    f1: f64,
+    f2: f64,
+    f3: f64,
+    f4: f64,
+    f5: f64,
+    f6: f64,
+    f7: f64,
+    f8: f64,
+    f9: f64,
+) -> u64 {
+    if n == 0 {
+        return acc + a + b + c + d + e + f + g + h;
+    }
+    let acc = acc + a + h + (f0 + f9) as u64;
+    let next: Link = unsafe { std::mem::transmute(next) };
+    become next(
+        n - 1,
+        acc,
+        chain as usize,
+        a + 1,
+        b,
+        c,
+        d,
+        e,
+        f,
+        g,
+        h + 2,
+        f0 + 1.0,
+        f1,
+        f2,
+        f3,
+        f4,
+        f5,
+        f6,
+        f7,
+        f8,
+        f9 + 0.5,
+    )
+}
