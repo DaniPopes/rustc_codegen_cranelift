@@ -453,6 +453,8 @@ fn main() {
     check_abi!(rust);
     check_abi!(c);
     check_abi!(rust_cold);
+    // `tailcc` doesn't support the Windows conventions, so `extern "tail"` doesn't match LLVM there.
+    #[cfg(not(windows))]
     check_abi!(tail, !cfg!(llvm_caller));
     #[cfg(any(target_arch = "aarch64", not(windows)))]
     assert_eq!(burn_preserves_registers(), 0, "burn must preserve registers");
