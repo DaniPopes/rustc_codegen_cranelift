@@ -80,6 +80,21 @@ unsafe fn ymm_operands() {
         );
         assert_eq!(transmute::<__m256i, [u64; 4]>(output), [3, 4, 1, 2]);
 
+        // The same place as input and output.
+        let mut place = input;
+        asm!(
+            "vperm2f128 {y}, {y}, {y}, 1",
+            y = inout(ymm_reg) place,
+            options(nostack, preserves_flags),
+        );
+        assert_eq!(transmute::<__m256i, [u64; 4]>(place), [3, 4, 1, 2]);
+        asm!(
+            "vperm2f128 {y}, {y}, {y}, 1",
+            y = inlateout(ymm_reg) place,
+            options(nostack, preserves_flags),
+        );
+        assert_eq!(transmute::<__m256i, [u64; 4]>(place), [1, 2, 3, 4]);
+
         // Explicit registers.
         let swapped: __m256i;
         asm!(
@@ -138,6 +153,23 @@ unsafe fn zmm_operands() {
             options(nostack, preserves_flags),
         );
         assert_eq!(transmute::<__m512i, [u64; 8]>(output), reversed);
+
+        // The same place as input and output.
+        let mut place = input;
+        asm!(
+            "vpermq {a}, {idx}, {a}",
+            a = inout(zmm_reg) place,
+            idx = in(zmm_reg) reverse,
+            options(nostack, preserves_flags),
+        );
+        assert_eq!(transmute::<__m512i, [u64; 8]>(place), reversed);
+        asm!(
+            "vpermq {a}, {idx}, {a}",
+            a = inlateout(zmm_reg) place,
+            idx = in(zmm_reg) reverse,
+            options(nostack, preserves_flags),
+        );
+        assert_eq!(transmute::<__m512i, [u64; 8]>(place), [1, 2, 3, 4, 5, 6, 7, 8]);
 
         let output: __m512i;
         asm!(
