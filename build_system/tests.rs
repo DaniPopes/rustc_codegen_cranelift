@@ -1,6 +1,7 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::build_sysroot::{SysrootConfig, SysrootKind};
@@ -59,6 +60,43 @@ impl TestCase {
 
 const NO_SYSROOT_SUITE: &[TestCase] = &[
     TestCase::build_lib("build.mini_core", "example/mini_core.rs", "lib,dylib"),
+    TestCase::custom("build.eh_frame_encodings", &|runner| {
+        if !runner.panic_unwind_support {
+            eprintln!("Unwinding is not supported on this target");
+            return;
+        }
+        let objdump = get_default_sysroot(&runner.bootstrap_host_compiler.rustc)
+            .join("lib/rustlib")
+            .join(&runner.bootstrap_host_compiler.target)
+            .join("bin/llvm-objdump");
+        if !objdump.exists() {
+            eprintln!("llvm-objdump is not installed (rustup component llvm-tools)");
+            return;
+        }
+
+        let out_dir = BUILD_EXAMPLE_OUT_DIR.to_path(&runner.dirs);
+        for target in
+            ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "aarch64-apple-darwin"]
+        {
+            let emit_object = |mut cmd: Command, name: &str| {
+                let object = out_dir.join(format!("eh_frame_encodings_{target}_{name}.o"));
+                cmd.args(["--target", target, "--crate-type", "lib", "--crate-name", "mini_core"])
+                    .args(["--edition=2024", "-Zforce-unstable-if-unmarked", "-Cpanic=unwind"])
+                    .args(["--emit", "obj", "-o"])
+                    .arg(&object)
+                    .arg("example/mini_core.rs");
+                spawn_and_wait(cmd);
+                cie_pointer_encodings(&objdump, &object)
+            };
+
+            let mut clif_cmd = Command::new(&runner.target_compiler.rustc);
+            clif_cmd.args(&runner.target_compiler.rustflags);
+            let clif = emit_object(clif_cmd, "clif");
+            let llvm = emit_object(Command::new(&runner.bootstrap_host_compiler.rustc), "llvm");
+            assert!(!llvm.is_empty(), "{target}: LLVM didn't emit a CIE");
+            assert_eq!(clif, llvm, "{target}: CIE pointer encodings differ from LLVM");
+        }
+    }),
     TestCase::build_lib("build.example", "example/example.rs", "lib"),
     TestCase::jit_bin("jit.mini_core_hello_world", "example/mini_core_hello_world.rs", "abc bcd"),
     TestCase::build_bin_and_run(
@@ -74,8 +112,10 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         "example/arbitrary_self_types_pointers_and_wrappers.rs",
         &[],
     ),
+    TestCase::jit_bin("jit.catch_unwind", "example/catch_unwind.rs", ""),
     TestCase::jit_bin("jit.std_example", "example/std_example.rs", "arg"),
     TestCase::build_bin_and_run("aot.std_example", "example/std_example.rs", &["arg"]),
+    TestCase::build_bin_and_run("aot.catch_unwind", "example/catch_unwind.rs", &[]),
     TestCase::build_bin_and_run("aot.dst_field_align", "example/dst-field-align.rs", &[]),
     TestCase::build_bin_and_run(
         "aot.subslice-patterns-const-eval",
@@ -532,6 +572,7 @@ pub(crate) fn run_tests(
         let runner = TestRunner::new(
             dirs.clone(),
             target_compiler,
+            bootstrap_host_compiler,
             use_unstable_features,
             sysroot_config.panic_unwind_support,
             skip_tests,
@@ -565,6 +606,7 @@ pub(crate) fn run_tests(
         let mut runner = TestRunner::new(
             dirs.clone(),
             target_compiler,
+            bootstrap_host_compiler,
             use_unstable_features,
             sysroot_config.panic_unwind_support,
             skip_tests,
@@ -596,6 +638,7 @@ struct TestRunner<'a> {
     skip_tests: &'a [&'a str],
     dirs: Dirs,
     target_compiler: Compiler,
+    bootstrap_host_compiler: &'a Compiler,
     stdlib_source: PathBuf,
 }
 
@@ -603,6 +646,7 @@ impl<'a> TestRunner<'a> {
     fn new(
         dirs: Dirs,
         mut target_compiler: Compiler,
+        bootstrap_host_compiler: &'a Compiler,
         use_unstable_features: bool,
         panic_unwind_support: bool,
         skip_tests: &'a [&'a str],
@@ -622,6 +666,7 @@ impl<'a> TestRunner<'a> {
             skip_tests,
             dirs,
             target_compiler,
+            bootstrap_host_compiler,
             stdlib_source,
         }
     }
@@ -721,4 +766,48 @@ impl<'a> TestRunner<'a> {
 
         spawn_and_wait(cmd);
     }
+}
+
+/// Returns the pointer encodings of the personality, LSDA and FDE pointers for all CIEs in
+/// `.eh_frame` of `object`, keyed by their augmentation letter.
+fn cie_pointer_encodings(objdump: &Path, object: &Path) -> BTreeMap<char, BTreeSet<String>> {
+    let output = Command::new(objdump).arg("--dwarf=frames").arg(object).output().unwrap();
+    assert!(output.status.success(), "llvm-objdump failed on {}", object.display());
+    let output = String::from_utf8(output.stdout).unwrap();
+
+    let mut encodings = BTreeMap::<_, BTreeSet<_>>::new();
+    let mut augmentation = "";
+    for line in output.lines().map(str::trim) {
+        if let Some(value) = line.strip_prefix("Augmentation:") {
+            augmentation = value.trim().trim_matches('"');
+        } else if let Some(data) = line.strip_prefix("Augmentation data:") {
+            let mut data =
+                data.split_whitespace().map(|byte| u8::from_str_radix(byte, 16).unwrap());
+            // The first letter is `z`, which means that the augmentation has data.
+            for letter in augmentation.chars().skip(1) {
+                match letter {
+                    'L' | 'R' => {
+                        encodings
+                            .entry(letter)
+                            .or_default()
+                            .insert(format!("{:#04x}", data.next().unwrap()));
+                    }
+                    'P' => {
+                        let encoding = data.next().unwrap();
+                        encodings.entry(letter).or_default().insert(format!("{encoding:#04x}"));
+                        // Skip the personality pointer, which is not part of the encoding.
+                        let pointer_size = match encoding & 0x0f {
+                            0x02 | 0x0a => 2,
+                            0x03 | 0x0b => 4,
+                            0x00 | 0x04 | 0x0c => 8,
+                            _ => panic!("unknown pointer encoding {encoding:#04x}"),
+                        };
+                        data.nth(pointer_size - 1);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    encodings
 }

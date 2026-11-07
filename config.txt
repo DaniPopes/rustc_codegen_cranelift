@@ -7,14 +7,17 @@
 
 testsuite.no_sysroot
 build.mini_core
+build.eh_frame_encodings
 build.example
 jit.mini_core_hello_world
 aot.mini_core_hello_world
 
 testsuite.base_sysroot
 aot.arbitrary_self_types_pointers_and_wrappers
+jit.catch_unwind
 jit.std_example
 aot.std_example
+aot.catch_unwind
 aot.dst_field_align
 aot.subslice-patterns-const-eval
 aot.track-caller-attribute
