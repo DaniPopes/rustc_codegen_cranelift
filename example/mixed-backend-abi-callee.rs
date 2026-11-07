@@ -177,11 +177,97 @@ macro_rules! define_abi {
 define_abi!(rust, "Rust",);
 define_abi!(c, "C", #[repr(C)]);
 
-// LLVM can't compile `i128` arguments in this convention on x86_64.
+// LLVM can't compile `i128` arguments in this convention on x86_64 when the first half would be
+// the last argument register.
 pub mod preserve_none {
-    use super::mix;
+    use super::{fold, mix};
 
     define_many_args!("rust-preserve-none");
+    // An `i128` that is passed on the stack is aligned to 16 bytes, after 12 integer arguments
+    // on x86_64 and 24 on aarch64.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(never)]
+    pub extern "rust-preserve-none" fn stack_i128(
+        a0: u64,
+        a1: u64,
+        a2: u64,
+        a3: u64,
+        a4: u64,
+        a5: u64,
+        a6: u64,
+        a7: u64,
+        a8: u64,
+        a9: u64,
+        a10: u64,
+        a11: u64,
+        a12: u64,
+        x: u128,
+        z: u64,
+    ) -> u64 {
+        mix(&[a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, fold(x), z])
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline(never)]
+    pub extern "rust-preserve-none" fn stack_i128(
+        a0: u64,
+        a1: u64,
+        a2: u64,
+        a3: u64,
+        a4: u64,
+        a5: u64,
+        a6: u64,
+        a7: u64,
+        a8: u64,
+        a9: u64,
+        a10: u64,
+        a11: u64,
+        a12: u64,
+        a13: u64,
+        a14: u64,
+        a15: u64,
+        a16: u64,
+        a17: u64,
+        a18: u64,
+        a19: u64,
+        a20: u64,
+        a21: u64,
+        a22: u64,
+        a23: u64,
+        a24: u64,
+        x: u128,
+        z: u64,
+    ) -> u64 {
+        mix(&[
+            a0,
+            a1,
+            a2,
+            a3,
+            a4,
+            a5,
+            a6,
+            a7,
+            a8,
+            a9,
+            a10,
+            a11,
+            a12,
+            a13,
+            a14,
+            a15,
+            a16,
+            a17,
+            a18,
+            a19,
+            a20,
+            a21,
+            a22,
+            a23,
+            a24,
+            fold(x),
+            z,
+        ])
+    }
 
     #[inline(never)]
     pub extern "rust-preserve-none" fn small(a: u8, b: u16, c: u64, d: u32, e: bool) -> u64 {
@@ -302,5 +388,82 @@ pub extern "rust-preserve-none" fn chain(
         f7,
         f8,
         f9 + 0.5,
+    )
+}
+
+/// A recursion with tail calls and most arguments on the stack.
+#[inline(never)]
+pub extern "rust-preserve-none" fn hop(
+    n: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+    a3: u64,
+    a4: u64,
+    a5: u64,
+    a6: u64,
+    a7: u64,
+    a8: u64,
+    a9: u64,
+    a10: u64,
+    a11: u64,
+    a12: u64,
+    a13: u64,
+    a14: u64,
+    a15: u64,
+) -> u64 {
+    if n == 0 {
+        return 0u64
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a0)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a1)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a2)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a3)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a4)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a5)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a6)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a7)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a8)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a9)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a10)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a11)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a12)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a13)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a14)
+            .wrapping_mul(1_000_003)
+            .wrapping_add(a15);
+    }
+    become hop(
+        n - 1,
+        a0 + 1,
+        a1,
+        a2,
+        a3,
+        a4,
+        a5,
+        a6,
+        a7,
+        a8,
+        a9,
+        a10,
+        a11,
+        a12,
+        a13,
+        a14 ^ 3,
+        a15 + a0,
     )
 }
