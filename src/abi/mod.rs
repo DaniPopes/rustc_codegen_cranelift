@@ -28,7 +28,7 @@ use smallvec::{SmallVec, smallvec};
 use self::pass_mode::*;
 pub(crate) use self::returning::codegen_return;
 use crate::base::codegen_unwind_terminate;
-use crate::debuginfo::EXCEPTION_HANDLER_CLEANUP;
+use crate::debuginfo::{EXCEPTION_HANDLER_CLEANUP, EXCEPTION_HANDLER_TERMINATE};
 use crate::prelude::*;
 
 struct ArgValue<'tcx> {
@@ -903,11 +903,16 @@ pub(crate) fn codegen_call_with_unwind_action(
             let pre_cleanup_block = fx.bcx.create_block();
             let pre_cleanup_block_call =
                 fx.bcx.func.dfg.block_call(pre_cleanup_block, &[BlockArg::TryCallExn(0)]);
+            let handler_tag = match unwind {
+                UnwindAction::Cleanup(_) => EXCEPTION_HANDLER_CLEANUP,
+                UnwindAction::Terminate(_) => EXCEPTION_HANDLER_TERMINATE,
+                UnwindAction::Continue | UnwindAction::Unreachable => unreachable!(),
+            };
             let exception_table = fx.bcx.func.dfg.exception_tables.push(ExceptionTableData::new(
                 sig_ref,
                 fallthrough_block_call,
                 [ExceptionTableItem::Tag(
-                    ExceptionTag::with_number(EXCEPTION_HANDLER_CLEANUP).unwrap(),
+                    ExceptionTag::with_number(handler_tag).unwrap(),
                     pre_cleanup_block_call,
                 )],
             ));
