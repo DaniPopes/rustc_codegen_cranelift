@@ -107,7 +107,7 @@ fn is_tail_conv(c: CanonAbi) -> bool {
 
 /// Whether `become` of a function with this ABI can be lowered to Cranelift's `return_call` and
 /// `return_call_indirect`. Cranelift only supports them for the conventions where the caller pops
-/// the stack arguments on x86_64 and aarch64.
+/// the stack arguments on x86_64 and aarch64, and not for `preserve_most`.
 fn supports_return_call(sess: &Session, c: CanonAbi, default_call_conv: CallConv) -> bool {
     let call_conv = conv_to_call_conv(sess, c, default_call_conv);
     call_conv == CallConv::Tail
@@ -690,9 +690,9 @@ pub(crate) fn codegen_terminator_call<'tcx>(
         }
     };
 
-    // FIXME(explicit_tail_calls): On targets other than x86_64 and aarch64 `become` of a function
-    // that doesn't use the `tail` calling convention is lowered to a regular call followed by a
-    // return, so it doesn't guarantee that the stack doesn't grow.
+    // FIXME(explicit_tail_calls): On targets other than x86_64 and aarch64, and for `rust-cold`,
+    // `become` of a function that doesn't use the `tail` calling convention is lowered to a regular
+    // call followed by a return, so it doesn't guarantee that the stack doesn't grow.
     if kind == CallKind::Tail
         && supports_return_call(fx.tcx.sess, fn_abi.conv, fx.target_config.default_call_conv)
     {
