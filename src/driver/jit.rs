@@ -13,6 +13,7 @@ use rustc_session::Session;
 use rustc_session::config::OutputFilenames;
 use rustc_span::sym;
 
+use crate::constant::ConstantCx;
 use crate::debuginfo::TypeDebugContext;
 use crate::prelude::*;
 use crate::unwind_module::UnwindModule;
@@ -76,7 +77,11 @@ pub(crate) fn run_jit(tcx: TyCtxt<'_>, target_cpu: String, jit_args: Vec<String>
                     );
                 }
                 MonoItem::Static(def_id) => {
-                    crate::constant::codegen_static(tcx, &mut jit_module, def_id);
+                    crate::constant::codegen_static(
+                        &mut ConstantCx::new(tcx),
+                        &mut jit_module,
+                        def_id,
+                    );
                 }
                 MonoItem::GlobalAsm(item_id) => {
                     let item = tcx.hir_item(item_id);
@@ -148,6 +153,7 @@ fn codegen_and_compile_fn<'tcx>(
             crate::PrintOnPanic(|| format!("{:?} {}", instance, tcx.symbol_name(instance).name));
 
         let cached_func = std::mem::replace(&mut cached_context.func, Function::new());
+        let mut constants_cx = ConstantCx::new(tcx);
         let codegened_func = crate::base::codegen_fn(
             tcx,
             sym::dummy_cgu_name,
@@ -155,8 +161,10 @@ fn codegen_and_compile_fn<'tcx>(
             &mut TypeDebugContext::default(),
             cached_func,
             module,
+            &mut constants_cx,
             instance,
         );
+        constants_cx.finalize(module);
 
         let mut global_asm = String::new();
         crate::base::compile_fn(

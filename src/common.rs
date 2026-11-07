@@ -270,13 +270,13 @@ pub(crate) fn create_wrapper_function(
     module.define_function(wrapper_func_id, &mut ctx).unwrap();
 }
 
-pub(crate) struct FunctionCx<'m, 'clif, 'tcx: 'm> {
+pub(crate) struct FunctionCx<'m, 'clif, 'tcx> {
     pub(crate) module: &'m mut dyn Module,
     pub(crate) debug_context: Option<&'clif mut DebugContext>,
     pub(crate) tcx: TyCtxt<'tcx>,
     pub(crate) target_config: TargetFrontendConfig, // Cached from module
     pub(crate) pointer_type: Type,                  // Cached from module
-    pub(crate) constants_cx: ConstantCx,
+    pub(crate) constants_cx: &'m mut ConstantCx<'tcx>,
     pub(crate) func_debug_cx: Option<FunctionDebugContext>,
 
     pub(crate) cgu_name: Symbol,

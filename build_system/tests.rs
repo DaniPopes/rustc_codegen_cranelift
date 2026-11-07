@@ -88,6 +88,11 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
         &[],
     ),
     TestCase::build_bin_and_run("aot.float-minmax-pass", "example/float-minmax-pass.rs", &[]),
+    TestCase::custom("aot.mergeable-constants", &|runner| {
+        // One codegen unit for each module, so the strings of the modules need merging.
+        runner.run_rustc(["example/mergeable-constants.rs", "-Ccodegen-units=16"]);
+        runner.run_out_command("mergeable-constants", &[]);
+    }),
     TestCase::custom("aot.powi_libcall_signature", &|runner| {
         let mut cmd = runner.rustc_command(["example/powi-libcall-signature.rs"]);
         let output = cmd.output().unwrap();
