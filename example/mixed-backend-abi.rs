@@ -3,6 +3,7 @@
 #![feature(explicit_tail_calls, rust_preserve_none_cc)]
 #![allow(improper_ctypes_definitions, incomplete_features)]
 
+#[cfg(any(target_arch = "aarch64", not(windows)))]
 use std::arch::asm;
 use std::hint::black_box;
 
