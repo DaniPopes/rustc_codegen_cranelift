@@ -264,8 +264,14 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
             [("llvm", Some(llvm), None), ("clif", None, Some(llvm))]
         {
             let callee = format!("callee_{name}");
-            let mut args =
-                vec!["example/mixed-backend-abi-callee.rs", "--crate-type=rlib", "--crate-name"];
+            // LLVM runs out of registers at -Copt-level=0 for `preserve_none` tail calls with many
+            // arguments on the stack.
+            let mut args = vec![
+                "example/mixed-backend-abi-callee.rs",
+                "--crate-type=rlib",
+                "-Copt-level=1",
+                "--crate-name",
+            ];
             args.push(&callee);
             args.extend(callee_flag);
             runner.run_rustc(args);
