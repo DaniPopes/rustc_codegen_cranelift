@@ -76,6 +76,20 @@ const BASE_SYSROOT_SUITE: &[TestCase] = &[
     ),
     TestCase::jit_bin("jit.std_example", "example/std_example.rs", "arg"),
     TestCase::build_bin_and_run("aot.std_example", "example/std_example.rs", &["arg"]),
+    TestCase::custom("aot.std_example_native_cpu", &|runner| {
+        // The host CPU enables more instructions in Cranelift, which changes which paths of the
+        // SIMD code in stdarch get inlined and compiled.
+        if !runner.is_native {
+            return;
+        }
+        runner.run_rustc([
+            "example/std_example.rs",
+            "--crate-name",
+            "std_example_native_cpu",
+            "-Ctarget-cpu=native",
+        ]);
+        runner.run_out_command("std_example_native_cpu", &["arg"]);
+    }),
     TestCase::build_bin_and_run("aot.dst_field_align", "example/dst-field-align.rs", &[]),
     TestCase::build_bin_and_run(
         "aot.subslice-patterns-const-eval",
