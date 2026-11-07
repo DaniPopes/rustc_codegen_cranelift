@@ -678,21 +678,39 @@ pub(crate) fn codegen_terminator_call<'tcx>(
                 .flat_map(|arg_abi| arg_abi.get_abi_param(fx.tcx).into_iter()),
         );
 
+        let mut variadic_start = fixed_arg_count;
         if fx.tcx.sess.target.is_like_darwin && fx.tcx.sess.target.arch == Arch::AArch64 {
             // Add any padding arguments needed for Apple AArch64.
             // There's no need to pad the argument list unless variadic arguments are actually being
             // passed.
             if abi_params.len() > fixed_arg_count {
-                // 128-bit integers take 2 registers, and everything else takes 1.
-                // FIXME: Add support for non-integer types
-                // This relies on the checks below to ensure all arguments are integer types and
-                // that the ABI is "C".
+                // 128-bit integers take 2 registers, other integers take 1 and floats take none.
+                // An aggregate that doesn't fit in the registers that are left goes on the stack
+                // and uses up all of them.
                 // The return argument isn't counted as it goes in its own dedicated register.
-                let integer_registers_used: usize = abi_params
-                    [if has_return_arg { 1 } else { 0 }..fixed_arg_count]
-                    .iter()
-                    .map(|arg| if arg.value_type.bits() == 128 { 2 } else { 1 })
-                    .sum();
+                let mut integer_registers_used = 0usize;
+                let mut index = if has_return_arg { 1 } else { 0 };
+                while index < fixed_arg_count {
+                    let aggregate = match abi_params[index].purpose {
+                        ArgumentPurpose::AggregateStart(count, _) => {
+                            Some(usize::try_from(count).unwrap())
+                        }
+                        _ => None,
+                    };
+                    let count = aggregate.unwrap_or(1);
+                    let registers: usize = abi_params[index..index + count]
+                        .iter()
+                        .filter(|arg| arg.value_type.is_int())
+                        .map(|arg| if arg.value_type.bits() == 128 { 2 } else { 1 })
+                        .sum();
+                    if aggregate.is_some() && integer_registers_used + registers > 8 {
+                        integer_registers_used = 8;
+                        index += count;
+                        continue;
+                    }
+                    integer_registers_used += registers;
+                    index += count;
+                }
                 // The ABI uses 8 registers before it starts pushing arguments to the stack. Pad out
                 // the registers if needed to ensure the variadic arguments are passed on the stack.
                 if integer_registers_used < 8 {
@@ -704,6 +722,26 @@ pub(crate) fn codegen_terminator_call<'tcx>(
                         fixed_arg_count..fixed_arg_count,
                         (integer_registers_used..8).map(|_| fx.bcx.ins().iconst(types::I64, 0)),
                     );
+                    variadic_start += 8 - integer_registers_used;
+                }
+
+                // Variadic arguments are passed in 8-byte stack slots, while Cranelift only gives
+                // them as many bytes as their type has. Widen them to fill the slot, passing
+                // floats as integers to also ensure they don't end up in a vector register.
+                for (param, arg) in
+                    abi_params[variadic_start..].iter_mut().zip(&mut call_args[variadic_start..])
+                {
+                    match param.value_type {
+                        types::F64 => {
+                            param.value_type = types::I64;
+                            *arg = codegen_bitcast(fx, types::I64, *arg);
+                        }
+                        types::I8 | types::I16 | types::I32 => {
+                            param.value_type = types::I64;
+                            *arg = fx.bcx.ins().uextend(types::I64, *arg);
+                        }
+                        _ => {}
+                    }
                 }
             }
 
@@ -712,15 +750,22 @@ pub(crate) fn codegen_terminator_call<'tcx>(
             // the case.
             assert!(abi_params.iter().all(|param| matches!(
                 param.purpose,
-                // The only purposes used are `Normal` and `StructReturn`.
-                ArgumentPurpose::Normal | ArgumentPurpose::StructReturn
+                // The only purposes used are `Normal`, `StructReturn` and `AggregateStart`.
+                ArgumentPurpose::Normal
+                    | ArgumentPurpose::StructReturn
+                    | ArgumentPurpose::AggregateStart(..)
             )));
         }
 
-        // Check all parameters are integers.
-        for param in abi_params.iter() {
-            if !param.value_type.is_int() {
-                // FIXME: Set %al to upperbound on float args once floats are supported.
+        // Check all variadic parameters are integers, except where floats are passed in vector
+        // registers exactly like fixed arguments.
+        let variadic_floats_in_registers = fx.tcx.sess.target.arch == Arch::AArch64
+            && !fx.tcx.sess.target.is_like_darwin
+            && !fx.tcx.sess.target.is_like_windows;
+        for param in &abi_params[variadic_start..] {
+            if !param.value_type.is_int() && !variadic_floats_in_registers {
+                // FIXME: x86_64 needs %al set to an upper bound of the vector registers used,
+                // which Cranelift can't express for a call.
                 fx.tcx.dcx().span_fatal(
                     source_info.span,
                     format!("Non int ty {:?} for variadic call", param.value_type),

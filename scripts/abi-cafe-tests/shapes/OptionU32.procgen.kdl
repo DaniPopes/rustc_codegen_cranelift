@@ -1,0 +1,4 @@
+tagged "OptionU32" {
+  Some { _ "u32"; }
+  None
+}

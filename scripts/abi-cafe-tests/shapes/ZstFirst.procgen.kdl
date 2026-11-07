@@ -1,0 +1,7 @@
+struct "ZstFirst" {
+    _ "EmptyStruct"
+    _ "u64"
+}
+
+struct "EmptyStruct" {
+}
